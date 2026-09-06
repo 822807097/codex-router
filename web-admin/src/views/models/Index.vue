@@ -46,7 +46,7 @@
         <el-button size="small" plain :loading="prefixPlatformSaving" @click="handlePrefixPlatform('remove')">
           移除前缀
         </el-button>
-        <el-button size="small" plain @click="showGroupManage = true">
+        <el-button size="small" plain @click="openGroupManage">
           <el-icon class="mr-1"><Files /></el-icon>
           分组管理
         </el-button>
@@ -425,13 +425,13 @@ my-model=real-vendor-name"
         列出当前全部有模型的分组（含官方基础模型等内置分组）。重命名 = 整组迁移到新名字；
         删除 = 整组移入「其他已接入模型」。模型本身不受影响，分组只是本页展示方式。
       </div>
-      <div v-for="g in manageableGroups" :key="g.name" class="flex items-center gap-2 mb-2">
+      <div v-for="g in groupManageRows" :key="g.name" class="flex items-center gap-2 mb-2">
         <el-input v-model="g.editName" size="small" class="font-mono" maxlength="64" />
         <span class="text-xs text-secondary whitespace-nowrap">{{ g.count }} 个模型</span>
         <el-button size="small" type="primary" plain :disabled="!g.editName.trim() || g.editName.trim() === g.name" @click="renameGroup(g)">重命名</el-button>
         <el-button size="small" type="danger" plain @click="deleteGroup(g)">删除</el-button>
       </div>
-      <el-empty v-if="manageableGroups.length === 0" description="还没有任何模型——先添加模型" :image-size="60" />
+      <el-empty v-if="groupManageRows.length === 0" description="还没有任何模型——先添加模型" :image-size="60" />
     </el-dialog>
 
     <!-- 自动拉取模型弹窗：选接口来源 → 拉取上游模型列表 → 勾选批量写入 -->
@@ -1352,11 +1352,20 @@ function setCustomGroup(slug, groupName) {
 // 自定义归属存在 customGroupMap（localStorage），优先级高于内置预置表——因此内置分组
 // （官方基础模型/国内直连等）同样可以整组改名或删除：改名=逐模型写入新组映射，
 // 删除=逐模型移入「其他已接入模型」，模型本身不受影响。
-const manageableGroups = computed(() => modelGroups.value.map((g) => ({
-  name: g.name,
-  count: g.models.length,
-  editName: g.name,
-})));
+
+// 分组管理行改为可编辑快照（打开弹窗时从 modelGroups 复制）：此前 v-model 直接绑
+// computed 产物的属性——任何响应式重算都会用新对象覆盖用户正在编辑的名字，
+// 重命名按钮永远处于禁用态（用户实锤：分组名称改不了）。
+const groupManageRows = ref([]);
+
+function openGroupManage() {
+  groupManageRows.value = modelGroups.value.map((g) => ({
+    name: g.name,
+    editName: g.name,
+    count: g.models.length,
+  }));
+  showGroupManage.value = true;
+}
 
 function renameGroup(group) {
   const nextName = group.editName.trim();
@@ -1385,9 +1394,12 @@ function deleteGroup(group) {
 const defaultGroupBySlug = new Map(DEFAULT_GROUPS.flatMap((g) => g.slugs.map((slug) => [slug, g.name])));
 const defaultDotByName = new Map(DEFAULT_GROUPS.map((g) => [g.name, g.dotClass]));
 function groupOf(slug, displayName = '') {
-  // 优先级：用户显式设置的分组 > 显示名的「厂商/模型名」前缀（b.ai/glm-5.3-flash → b.ai）
-  // > 预置 slug 表 > 其他已接入模型。显示名带厂商前缀的模型自动按厂商归组。
+  // 优先级：用户显式设置的分组 > 官方特征 > 显示名的「厂商/模型名」前缀
+  // （b.ai/glm-5.3-flash → b.ai）> 预置 slug 表 > 其他已接入模型。
+  // 官方特征：上游新增的官方模型（gpt-6-astra / gpt-reserve / 未来 gpt-7）
+  // 自动归入官方组，不必每次改代码（gpt-oss 是开源模型走第三方，不在此列）。
   if (customGroupMap.value[slug]) return customGroupMap.value[slug];
+  if (/^(?:gpt-\d|gpt-reserve|codex-)/i.test(slug)) return DEFAULT_GROUPS[0].name;
   const dn = String(displayName || '');
   const slash = dn.indexOf('/');
   if (slash > 0) return dn.slice(0, slash).trim();
