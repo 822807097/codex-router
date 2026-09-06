@@ -198,7 +198,7 @@ function resolveExecutable(name) {
 
 function assertDependencies() {
   if (!existsSync(path.join(repoRoot, "node_modules", "@cursor", "sdk"))) {
-    throw new Error(`Dependencies missing. Run 'npm ci' in ${repoRoot} first.`);
+    throw new Error(`Dependencies missing. Run 'npm install' in ${repoRoot} first.`);
   }
   resolveExecutable("node");
   resolveExecutable("bun");

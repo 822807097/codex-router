@@ -138,6 +138,7 @@
           <div class="flex gap-2">
             <el-button v-if="!cursorGw.running" type="primary" size="small" :loading="cursorGwStarting" @click="startCursorGw">启动网关</el-button>
             <el-button v-else size="small" :loading="cursorGwRestarting" @click="restartCursorGw">重启网关</el-button>
+            <el-button v-if="cursorGw.running" size="small" type="warning" plain :loading="cursorGwStopping" @click="stopCursorGw">停止网关</el-button>
             <el-button size="small" :loading="cursorGwUpstreamChecking" @click="checkGatewayUpstream">检查网关更新</el-button>
             <el-button size="small" :loading="cursorGwLoading" @click="loadCursorGw">刷新状态</el-button>
           </div>
@@ -379,7 +380,7 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import request from '../../api/request.js';
 import {
-  getSystemConfig, saveSystemConfig, testVisionRelay, getCursorGatewayStatus, listCursorGatewayAccounts, addCursorGatewayAccount, removeCursorGatewayAccount, restartCursorGateway, startCursorGateway, listCursorGatewayModels, restartCodexDesktopApp, syncCodexSessionProviders, getCodexDesktopState, restoreCodexDesktopOfficial, applyCodexDesktopRouter, checkForUpdate, applyUpdate, getModelContextDefaults, saveModelContextDefaults,
+  getSystemConfig, saveSystemConfig, testVisionRelay, getCursorGatewayStatus, listCursorGatewayAccounts, addCursorGatewayAccount, removeCursorGatewayAccount, restartCursorGateway, startCursorGateway, stopCursorGateway, listCursorGatewayModels, restartCodexDesktopApp, syncCodexSessionProviders, getCodexDesktopState, restoreCodexDesktopOfficial, applyCodexDesktopRouter, checkForUpdate, applyUpdate, getModelContextDefaults, saveModelContextDefaults,
 } from '../../api/system.js';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AsyncContainer from '../../components/AsyncContainer.vue';
@@ -569,6 +570,7 @@ const cursorGw = ref({ running: false, port: 6718, error: '' });
 const cursorGwLoading = ref(false);
 const cursorGwRestarting = ref(false);
 const cursorGwStarting = ref(false);
+const cursorGwStopping = ref(false);
 const cursorGwUpstream = ref(null);
 const cursorGwUpstreamChecking = ref(false);
 const cursorGwUpstreamUpdating = ref(false);
@@ -651,6 +653,24 @@ async function restartCursorGw() {
   }
 }
 
+async function stopCursorGw() {
+  try {
+    await ElMessageBox.confirm(
+      '将停止内置 Cursor 网关并释放硬件资源（账号池与凭据保留，下次启动自动加载；cursor/* 模型在网关停止期间不可用）。确定？',
+      '停止 Cursor 网关',
+      { confirmButtonText: '停止网关', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch { return; }
+  cursorGwStopping.value = true;
+  try {
+    const res = await stopCursorGateway();
+    ElMessage.success(res.message || '网关已停止');
+    setTimeout(() => loadCursorGw(), 1500);
+  } catch { /* 拦截器提示 */ } finally {
+    cursorGwStopping.value = false;
+  }
+}
+
 async function restartDesktopApp() {
   try {
     await ElMessageBox.confirm(
@@ -693,11 +713,18 @@ async function loadCursorGw() {
     const st = await getCursorGatewayStatus({ skipGlobalError: true });
     cursorGw.value = { ...cursorGw.value, ...st, error: st?.error || '' };
     if (st?.running) {
-      const acc = await listCursorGatewayAccounts({ skipGlobalError: true });
-      // 网关用 status 字段标记：active 正常，其余（cooldown/disabled 等）视为停用
-      cursorAccounts.value = (acc?.data || acc?.accounts || [])
-        .filter((a) => a && typeof a === 'object')
-        .map((a) => ({ ...a, statusText: a.status === 'active' ? '正常' : (a.disabledReason || '停用') }));
+      // 账号列表拉取失败不影响运行状态判定：状态和账号管理是两件事
+      // （如未配置管理密码时状态正常但列表 401，此前会被误标成「未运行」）
+      try {
+        const acc = await listCursorGatewayAccounts({ skipGlobalError: true });
+        // 网关用 status 字段标记：active 正常，其余（cooldown/disabled 等）视为停用
+        cursorAccounts.value = (acc?.data || acc?.accounts || [])
+          .filter((a) => a && typeof a === 'object')
+          .map((a) => ({ ...a, statusText: a.status === 'active' ? '正常' : (a.disabledReason || '停用') }));
+      } catch (accErr) {
+        cursorAccounts.value = [];
+        cursorGw.value.error = accErr.response?.data?.error?.message || accErr.message || '账号列表获取失败';
+      }
     } else {
       // 网关未运行：清空账号表，避免展示上一次连接时的过期列表误导用户
       cursorAccounts.value = [];

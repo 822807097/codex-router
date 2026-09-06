@@ -69,6 +69,15 @@ export function startCursorGateway() {
   });
 }
 
+// 停止网关（不使用时释放硬件资源；账号池与凭据保留）
+export function stopCursorGateway() {
+  return request({
+    url: '/cursor-gateway/stop',
+    method: 'post',
+    timeout: 30_000,
+  });
+}
+
 // 网关可服务的模型清单（读取路由目录的 cursor-* 模型，不依赖网关在线）
 export function listCursorGatewayModels(config = {}) {
   return request({
