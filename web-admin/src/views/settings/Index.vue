@@ -41,7 +41,22 @@
             Codex 官方模型按官方策略（128k）固定，不受此项影响。保存后需重启路由生效。
           </div>
         </el-form-item>
-        <el-button size="small" type="primary" :loading="compactSaving" @click="saveCompactDefault">保存默认压缩阈值</el-button>
+        <el-form-item label="服务端强制压缩（智能体不压缩时的兜底）" class="mb-2">
+          <div class="flex items-center gap-3 flex-wrap">
+            <el-switch v-model="chatGuardEnabled" />
+            <span class="text-xs text-secondary">启用后，会话 tokens 超过下方阈值时由路由直接裁剪最旧历史</span>
+          </div>
+          <div class="mt-2 flex items-center gap-2 flex-wrap">
+            <span class="text-xs text-secondary shrink-0">强制压缩阈值</span>
+            <el-input v-model="chatGuardInput" placeholder="例如 400000 或 400k" class="font-mono" style="width: 220px" />
+            <span class="text-xs text-secondary">tokens（默认 400000）</span>
+          </div>
+          <div class="text-xs text-warning-text mt-2">
+            此阈值对所有智能体生效：智能体自身不压缩（或压缩失灵）时，路由在服务端裁剪最旧历史，
+            保证任务不因历史无限膨胀而被上游拒绝。裁剪只删最旧轮次，最新上下文完整保留。
+          </div>
+        </el-form-item>
+        <el-button size="small" type="primary" :loading="chatGuardSaving" @click="saveChatGuard">保存服务端强制压缩设置</el-button>
       </el-form>
     </el-card>
     <!-- 视觉中继状态 -->
@@ -397,6 +412,9 @@ const updateDone = ref(false);
 
 // 全局默认压缩阈值
 const compactLimitInput = ref('');
+const chatGuardEnabled = ref(true);
+const chatGuardInput = ref('');
+const chatGuardSaving = ref(false);
 const compactSaving = ref(false);
 
 async function loadCompactDefault() {
@@ -404,6 +422,39 @@ async function loadCompactDefault() {
     const res = await getModelContextDefaults({ skipGlobalError: true });
     compactLimitInput.value = res?.autoCompactTokenLimit ? String(res.autoCompactTokenLimit) : '';
   } catch { /* 读取失败保持留空 */ }
+  // 服务端强制压缩（chatGuard）
+  try {
+    const res = await request({ url: '/chat-guard', method: 'get', skipGlobalError: true });
+    chatGuardEnabled.value = res?.enabled !== false;
+    chatGuardInput.value = res?.maxContextTokens ? String(res.maxContextTokens) : '';
+  } catch { /* 保持默认 */ }
+}
+
+async function saveChatGuard() {
+  const raw = String(chatGuardInput.value || '').trim();
+  let value = 400_000;
+  if (raw) {
+    const m = /^([0-9]+(?:\.[0-9]+)?)([kKmM])?$/.exec(raw);
+    if (!m) {
+      ElMessage.warning('请填写正整数（支持 k / M 简写，如 400k、1M）');
+      return;
+    }
+    value = Math.round(Number(m[1]) * (m[2]?.toLowerCase() === 'm' ? 1_000_000 : m[2]?.toLowerCase() === 'k' ? 1000 : 1));
+  }
+  chatGuardSaving.value = true;
+  try {
+    const res = await request({
+      url: '/chat-guard',
+      method: 'post',
+      data: { enabled: chatGuardEnabled.value, maxContextTokens: value },
+      skipGlobalError: true,
+    });
+    ElMessage.success(res.message || `服务端强制压缩已保存（${value} tokens）；重启路由后生效`);
+  } catch (err) {
+    ElMessage.error(err.response?.data?.error?.message || '保存失败');
+  } finally {
+    chatGuardSaving.value = false;
+  }
 }
 
 async function saveCompactDefault() {

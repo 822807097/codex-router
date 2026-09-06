@@ -508,6 +508,10 @@ try {
     targets: TARGETS,
     catalog: activeCatalog,
     catalogPath: CATALOG_PATH,
+    chatGuard: {
+      enabled: cfg.chatGuard?.enabled !== false,
+      maxContextTokens: Number(cfg.chatGuard?.maxContextTokens) || 400_000,
+    },
     providerPool,
     responseHistory,
     goalCheckpoints,
