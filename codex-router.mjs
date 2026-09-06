@@ -221,6 +221,23 @@ process.on('unhandledRejection', (error) => handleFatalProcessError('unhandledRe
 // 让桌面端据此做滑动窗口/压缩，避免第三方模型每轮全量重发历史（卡思考根因）。
 // 目录整个启动过程只读一次：内存中应用变更、有变更才写盘，快照复用同一对象。
 let activeCatalog;
+// 全新机器首次启动：$CODEX_HOME/models.json 尚不存在（桌面端官方模式下才会写它）。
+// 用仓库模板播种，避免启动即 catalog_invalid 退出；模板也缺失时退回空目录（/v1/models
+// 返回空列表，面板仍可正常添加模型），不再把「还没配过模型」当成致命错误。
+if (!fs.existsSync(CATALOG_PATH)) {
+  try {
+    const templatePath = path.join(__dirname, 'models.template.json');
+    const seed = fs.existsSync(templatePath)
+      ? fs.readFileSync(templatePath, 'utf8')
+      : '{"models": []}';
+    JSON.parse(seed);
+    fs.mkdirSync(path.dirname(CATALOG_PATH), { recursive: true });
+    fs.writeFileSync(CATALOG_PATH, seed);
+    process.stderr.write(`[catalog] models.json 不存在，已用内置模板播种：${CATALOG_PATH}\n`);
+  } catch (seedError) {
+    process.stderr.write(`[catalog] 模型目录播种失败（catalog_seed_failed）：${seedError.message}\n`);
+  }
+}
 try {
   const catalog = readModelCatalogFile(CATALOG_PATH, { maxBytes: MAX_CATALOG_BYTES });
   const inspection = inspectModelCatalog(catalog);
