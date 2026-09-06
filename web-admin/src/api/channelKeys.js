@@ -37,6 +37,15 @@ export function revokeChannelKey(id) {
   });
 }
 
+// 按通道批量吊销密钥（删除厂商分组时联动，数据保留可恢复）
+export function revokeChannelKeysByTarget(target) {
+  return request({
+    url: '/channel-keys/revoke-by-target',
+    method: 'post',
+    data: { target },
+  });
+}
+
 export function testChannelKey(id) {
   return request({
     url: '/channel-keys/test',

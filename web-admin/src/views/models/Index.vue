@@ -347,7 +347,7 @@ my-glm=glm-5.3-flash"
         </el-form-item>
 
         <el-divider content-position="left">密钥管理（多账号自动轮换，额度耗尽自动冷却切换）</el-divider>
-        <div class="flex flex-col gap-1 mb-3">
+        <div class="flex flex-col gap-1 mb-3 max-h-48 overflow-y-auto">
           <div
             v-for="k in vendorEdit.keys"
             :key="k.id"
@@ -674,7 +674,7 @@ import {
   getRequestLogDetail,
 } from '../../api/models.js';
 import { getSystemConfig } from '../../api/system.js';
-import { getCodexDefaultModel, setCodexDefaultModel, createChannelKey, listChannelKeys, revokeChannelKey } from '../../api/channelKeys.js';
+import { getCodexDefaultModel, setCodexDefaultModel, createChannelKey, listChannelKeys, revokeChannelKey, revokeChannelKeysByTarget } from '../../api/channelKeys.js';
 import { prefixModelPlatform } from '../../api/models.js';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AsyncContainer from '../../components/AsyncContainer.vue';
@@ -1109,7 +1109,7 @@ async function handleDeleteVendorGroup(infos, group) {
     : '';
   try {
     await ElMessageBox.confirm(
-      `删除分组「${group.name}」将一并删除该厂商的 ${group.models.length} 个模型与 ${infoList.length} 个接口配置，密钥池中的 key 保留。此操作不可恢复。${officialNote}`,
+      `删除分组「${group.name}」将一并删除该厂商的 ${group.models.length} 个模型与 ${infoList.length} 个接口配置，密钥一并吊销（数据保留，误删可恢复）。此操作不可恢复。${officialNote}`,
       '删除分组',
       { confirmButtonText: '全部删除', cancelButtonText: '取消', type: 'warning' },
     );
@@ -1132,9 +1132,14 @@ async function handleDeleteVendorGroup(infos, group) {
       selectedForDelete.delete(m.slug);
     }
     persistGroupMap();
-    ElMessage.success(`分组「${group.name}」已删除（${group.models.length} 个模型 + 接口配置）；重启路由与 Codex 后完全生效`);
+    // 删除通道联动吊销密钥（数据保留可恢复），避免密钥池堆积孤儿条目
+    for (const ch of infoList) {
+      try { await revokeChannelKeysByTarget(ch.name); } catch { /* 吊销失败不阻塞删除 */ }
+    }
+    ElMessage.success(`分组「${group.name}」已删除（${group.models.length} 个模型 + 接口配置 + 密钥吊销）；重启路由与 Codex 后完全生效`);
     await loadModels();
     await refreshVendorGroups();
+    await loadPoolKeyCounts();
   } catch { /* 错误提示由请求拦截器统一处理 */ }
 }
 
