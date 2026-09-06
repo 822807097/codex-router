@@ -223,8 +223,11 @@ const isEmpty = computed(() => {
 const statCards = computed(() => {
   const m = stats.value.metrics || {};
   const windowLabel = `近 ${days.value} 天`;
+  const estimatedHint = Number(m.estimatedTokens) > 0
+    ? `；另有官方通道估算 ${formatTokens(m.estimatedTokens)} 未计入`
+    : '';
   return [
-    { icon: '⚡', label: 'tokens 用量', value: m.totalTokensFormatted || '0', big: true, hint: `${windowLabel}；官方通道 usage 缺失时按请求体量估算（数值偏高）` },
+    { icon: '⚡', label: 'tokens 用量', value: m.totalTokensFormatted || '0', big: true, hint: `${windowLabel}真实用量${estimatedHint}（官方 usage 缺失时的请求体量估算不混入，数值偏高）` },
     { icon: '💬', label: '会话数量（估算）', value: m.totalSessions || 0, big: true, hint: `${windowLabel}；按调用频次聚类估算的任务会话数` },
     { icon: '✉️', label: '调用次数', value: m.totalRounds || 0, big: true, hint: `${windowLabel}；API 请求次数（智能体一轮任务含多次调用）` },
     { icon: '📅', label: '活跃天数', value: m.activeDays || 0, big: true, hint: `${windowLabel}内有调用记录的天数` },

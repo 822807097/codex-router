@@ -538,6 +538,7 @@ try {
           target: 'openai',
           inputTokens: estimatedInput,
           outputTokens: 0,
+          estimated: true, // 估算行：Dashboard 统计默认排除（数值远高于真实计费）
         });
       } catch { /* 统计旁路不得影响请求 */ }
     },
@@ -672,6 +673,7 @@ function recordImageUsage(payload) {
       target: 'openai',
       inputTokens: estimatedInput > 0 ? estimatedInput : 1,
       outputTokens: 0,
+      estimated: true, // 生图按 prompt 长度估算，同为估算行
     });
   } catch { /* 统计旁路不得影响请求 */ }
 }
