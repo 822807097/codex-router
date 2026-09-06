@@ -566,5 +566,9 @@
     "conversationModel": "gpt-5.4-mini",
     "viaProxy": null,
     "timeouts": {}
+  },
+  "chatGuard": {
+    "enabled": true,
+    "maxContextTokens": 400000
   }
 }
