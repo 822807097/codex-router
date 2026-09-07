@@ -29,6 +29,6 @@
   "author": "",
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=23.4"
   }
 }

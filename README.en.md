@@ -4,7 +4,7 @@
 
 **Local-First Multi-Model Router & Gateway**
 
-![License](https://img.shields.io/badge/license-MIT-green) ![Node](https://img.shields.io/badge/Node.js-18%2B-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green) ![Node](https://img.shields.io/badge/Node.js-23.4%2B-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
 [简体中文](./README.md) | **English**
 
@@ -92,7 +92,7 @@ When your ChatGPT subscription quota runs out, the task does not restart: pick a
 
 ## 2. Preparation (3 minutes)
 
-1. Install **Node.js 18 or newer** ([nodejs.org](https://nodejs.org), next-next-next is fine).
+1. Install **Node.js v23.4 or newer** (the latest LTS v24 from [nodejs.org](https://nodejs.org), next-next-next is fine). The router relies on the built-in `node:sqlite` module (available by default since v23.4); older versions fail at startup — the launcher pre-checks and prints an upgrade hint.
 2. Prepare **your own** vendor API keys (DeepSeek open platform, Alibaba Bailian, SiliconFlow, OpenRouter, …). This project ships **no built-in keys**.
 3. Download and extract this project's source to any directory, e.g. `D:\codex-router`.
 
