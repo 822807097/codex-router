@@ -46,6 +46,9 @@
         <el-button size="small" plain :loading="prefixPlatformSaving" @click="handlePrefixPlatform('remove')">
           移除前缀
         </el-button>
+        <el-button size="small" plain :loading="prefixPlatformSaving" @click="handlePrefixPlatform('rebuild')">
+          重算前缀
+        </el-button>
         <el-button size="small" plain @click="openGroupManage">
           <el-icon class="mr-1"><Files /></el-icon>
           分组管理
@@ -96,9 +99,9 @@
                 size="small"
                 effect="plain"
                 class="cursor-pointer"
-                @click="openVendorEdit(vendorChannelsOf(group)[0])"
+                @click="openVendorEdit(primaryChannelOf(group))"
               >🔑 Key 池 {{ vendorPoolKeyTotal(group) }} 把</el-tag>
-              <el-button size="small" plain @click="openVendorEdit(vendorChannelsOf(group)[0])">
+              <el-button v-if="primaryChannelOf(group)" size="small" plain @click="openVendorEdit(primaryChannelOf(group))">
                 <el-icon class="mr-1"><Edit /></el-icon>
                 编辑分组（名称/地址/Key）
               </el-button>
@@ -108,11 +111,11 @@
                 type="danger"
                 @click="handleBatchDelete(group)"
               >删除所选 ({{ selectedInGroup(group).length }})</el-button>
-              <el-button size="small" type="primary" plain @click="openAddModelsToGroup(vendorChannelsOf(group), group)">
+              <el-button v-if="primaryChannelOf(group)" size="small" type="primary" plain @click="openAddModelsToGroup(primaryChannelOf(group), group)">
                 <el-icon class="mr-1"><Plus /></el-icon>
                 添加模型
               </el-button>
-              <el-button size="small" type="danger" plain @click="handleDeleteVendorGroup(vendorChannelsOf(group), group)">
+              <el-button v-if="familyChannelsOf(group).length > 0" size="small" type="danger" plain @click="handleDeleteVendorGroup(familyChannelsOf(group), group)">
                 删除分组
               </el-button>
             </div>
@@ -827,8 +830,24 @@ function vendorChannelsOf(group) {
 function vendorPoolKeyTotal(group) {
   // poolKeyCounts 是 ref：脚本作用域必须 .value 解包（模板内联才会自动解包），
   // 否则恒为 0，分组头部的「Key 池」计数标签永远不渲染（2026-09-04 用户实锤）。
+  // 只累计与分组名同族的通道（b.ai 组不再把混入模型的智谱通道 key 计进来）。
   const counts = poolKeyCounts.value || {};
-  return vendorChannelsOf(group).reduce((sum, ch) => sum + (counts[ch.name] || 0), 0);
+  return familyChannelsOf(group).reduce((sum, ch) => sum + (counts[ch.name] || 0), 0);
+}
+
+// 组名 ↔ 通道锁定：分组头部的「编辑分组/添加模型/Key 池/删除分组」只能作用于与分组名
+// 同族的通道（精确同名，或「组名-」前缀的同族通道，如 deepseek → deepseek-responses/chat）。
+// 绝不回退到「第一个地址胶囊」——组内模型可能绑定别的厂商通道（b.ai 组曾混入绑定
+// zhipu-coding 的模型），回退会把编辑弹窗开到别的厂商头上（2026-09-07 用户实锤）。
+function familyChannelsOf(group) {
+  const name = String(group?.name || '').trim();
+  if (!name) return [];
+  return vendorChannelsOf(group).filter((ch) => (
+    ch.name === name || (typeof ch.name === 'string' && ch.name.startsWith(`${name}-`))
+  ));
+}
+function primaryChannelOf(group) {
+  return familyChannelsOf(group)[0] || null;
 }
 
 function selectedInGroup(group) {
@@ -1103,40 +1122,58 @@ async function handleAddModelsToGroup() {
 
 async function handleDeleteVendorGroup(infos, group) {
   const infoList = Array.isArray(infos) ? infos : [infos];
-  const officialInGroup = group.models.filter((m) => OFFICIAL_SLUGS.has(m.slug));
+  // 只删组名同族通道及绑定这些通道的模型；用户显式挪进本组的外来通道模型各自独立，
+  // 一并删除会殃及别的厂商（b.ai 组曾混入绑定 zhipu-coding 的模型，2026-09-07 实锤）。
+  const doomedChannelNames = new Set(infoList.flatMap((ch) => ch.channels.map((c) => c.name)));
+  // 全局扫描绑定同族通道的模型：组外模型（被自定义分组钉在别的组）若不同删，
+  // target.delete 删通道后会把它变成无路由孤儿，整批事务 422 锁死（2026-09-07 审查 P1-1）。
+  const doomedModels = allModels.value.filter((m) => doomedChannelNames.has(m.target));
+  const doomedOutside = doomedModels.filter((m) => !group.models.some((g) => g.slug === m.slug));
+  const officialInGroup = doomedModels.filter((m) => OFFICIAL_SLUGS.has(m.slug));
   const officialNote = officialInGroup.length
     ? `\n注意：其中包含 ${officialInGroup.length} 个官方基础模型（${officialInGroup.slice(0, 4).map((m) => m.slug).join('、')}${officialInGroup.length > 4 ? ' 等' : ''}），历史会话可能正在引用，删除后旧对话可能异常。`
     : '';
+  const outsideNote = doomedOutside.length
+    ? `\n另有 ${doomedOutside.length} 个分组外的模型也绑定这些通道（${doomedOutside.slice(0, 4).map((m) => m.slug).join('、')}${doomedOutside.length > 4 ? ' 等' : ''}），将一并删除，否则删通道后它们会失去路由。`
+    : '';
+  const survivors = group.models.filter((m) => !doomedChannelNames.has(m.target));
+  const survivorNote = survivors.length
+    ? `\n另有 ${survivors.length} 个绑定其他厂商通道的模型（${survivors.slice(0, 4).map((m) => m.slug).join('、')}${survivors.length > 4 ? ' 等' : ''}）不受影响，将移入「${OTHER_GROUP_NAME}」。`
+    : '';
   try {
     await ElMessageBox.confirm(
-      `删除分组「${group.name}」将一并删除该厂商的 ${group.models.length} 个模型与 ${infoList.length} 个接口配置，密钥一并吊销（数据保留，误删可恢复）。此操作不可恢复。${officialNote}`,
+      `删除分组「${group.name}」将删除这些通道上的全部 ${doomedModels.length} 个模型与 ${doomedChannelNames.size} 个接口配置，密钥一并吊销（数据保留，误删可恢复）。此操作不可恢复。${officialNote}${outsideNote}${survivorNote}`,
       '删除分组',
       { confirmButtonText: '全部删除', cancelButtonText: '取消', type: 'warning' },
     );
   } catch { return; }
   try {
     const routing = await getModelRouting({ skipGlobalError: true });
-    const refToName = new Map((routing?.targets || []).map((t) => [t.targetRef, t.name]));
-    const channelRefs = infoList
-      .map((ch) => (routing?.targets || []).find((t) => t.name === ch.name)?.targetRef)
+    // 按通道名全量取 ref：地址胶囊按 apiBase 合并过，只取头通道会漏删同地址的兄弟通道
+    const channelRefs = (routing?.targets || [])
+      .filter((t) => doomedChannelNames.has(t.name))
+      .map((t) => t.targetRef)
       .filter(Boolean);
     const operations = [
-      ...group.models.map((m) => ({ kind: 'model.delete', slug: m.slug })),
+      ...doomedModels.map((m) => ({ kind: 'model.delete', slug: m.slug })),
       ...channelRefs.map((ref) => ({ kind: 'target.delete', targetRef: ref })),
     ];
-    void refToName;
     await commitModelOperations(operations);
-    for (const m of group.models) {
+    for (const m of doomedModels) {
       delete latencies.value[m.slug];
       delete customGroupMap.value[m.slug];
       selectedForDelete.delete(m.slug);
     }
+    // 保留下来的外来模型若还挂在被删组名下，移入「其他已接入模型」，避免幽灵分组
+    for (const m of survivors) {
+      if (customGroupMap.value[m.slug] === group.name) setCustomGroup(m.slug, OTHER_GROUP_NAME);
+    }
     persistGroupMap();
     // 删除通道联动吊销密钥（数据保留可恢复），避免密钥池堆积孤儿条目
-    for (const ch of infoList) {
-      try { await revokeChannelKeysByTarget(ch.name); } catch { /* 吊销失败不阻塞删除 */ }
+    for (const name of doomedChannelNames) {
+      try { await revokeChannelKeysByTarget(name); } catch { /* 吊销失败不阻塞删除 */ }
     }
-    ElMessage.success(`分组「${group.name}」已删除（${group.models.length} 个模型 + 接口配置 + 密钥吊销）；重启路由与 Codex 后完全生效`);
+    ElMessage.success(`分组「${group.name}」已删除（${doomedModels.length} 个模型 + ${channelRefs.length} 个接口配置 + 密钥吊销）；重启路由与 Codex 后完全生效`);
     await loadModels();
     await refreshVendorGroups();
     await loadPoolKeyCounts();
@@ -1331,7 +1368,9 @@ const OTHER_GROUP_DOT = 'bg-chart-6';
 // 自定义分组循环取色的调色板（与预置组区分）
 const CUSTOM_GROUP_DOTS = ['bg-chart-2', 'bg-chart-4', 'bg-chart-5', 'bg-chart-3', 'bg-chart-1'];
 
-const GROUP_MAP_STORAGE_KEY = 'router-model-group-map';
+// v2：归组规则改为「实际路由通道厂商短名」后，旧 key 里按显示名前缀写入的映射
+// （如 zhipu-flash-plan → b.ai）会毒化新规则（2026-09-07 审查 P1-2），一次性弃用旧数据。
+const GROUP_MAP_STORAGE_KEY = 'router-model-group-map-v2';
 function loadGroupMap() {
   try {
     const raw = JSON.parse(localStorage.getItem(GROUP_MAP_STORAGE_KEY) || '{}');
@@ -1371,7 +1410,7 @@ function renameGroup(group) {
   const nextName = group.editName.trim();
   if (!nextName || nextName === group.name) return;
   for (const m of allModels.value) {
-    if (groupOf(m.slug) === group.name) setCustomGroup(m.slug, nextName);
+    if (groupOf(m.slug, m.displayName, m.target) === group.name) setCustomGroup(m.slug, nextName);
   }
   persistGroupMap();
   group.name = nextName;
@@ -1386,23 +1425,32 @@ function deleteGroup(group) {
     { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
   ).then(() => {
     for (const m of allModels.value) {
-      if (groupOf(m.slug) === group.name) setCustomGroup(m.slug, OTHER_GROUP_NAME);
+      if (groupOf(m.slug, m.displayName, m.target) === group.name) setCustomGroup(m.slug, OTHER_GROUP_NAME);
     }
     ElMessage.success(`分组已删除，${group.count} 个模型移入「${OTHER_GROUP_NAME}」`);
   }).catch(() => { /* 用户取消 */ });
 }
 const defaultGroupBySlug = new Map(DEFAULT_GROUPS.flatMap((g) => g.slugs.map((slug) => [slug, g.name])));
 const defaultDotByName = new Map(DEFAULT_GROUPS.map((g) => [g.name, g.dotClass]));
-function groupOf(slug, displayName = '') {
-  // 优先级：用户显式设置的分组 > 官方特征 > 显示名的「厂商/模型名」前缀
-  // （b.ai/glm-5.3-flash → b.ai）> 预置 slug 表 > 其他已接入模型。
+// 通道名 → 分组厂商短名：取通道名首个 '-' 前段，与后端「显示名加平台前缀」的派生规则
+// 一致（zhipu-coding → zhipu、deepseek-responses → deepseek、b.ai → b.ai）。
+// openai 是官方登录态通道，官方模型走下方正则/预置表，不在此自成一组。
+function targetGroupName(target) {
+  const name = String(target || '').trim();
+  if (!name || name === 'openai') return '';
+  return name.split('-')[0] || '';
+}
+function groupOf(slug, displayName = '', target = '') {
+  // 优先级：用户显式设置的分组 > 官方特征 > 实际路由通道的厂商短名 > 预置 slug 表 > 其他。
+  // 分组只看模型真实绑定的通道（slug 正则命中的 target），绝不从显示名前缀反推——
+  // 显示名前缀是历史残留（zhipu-flash-plan 至今显示为 b.ai/glm-5.3-flash），按它归组
+  // 会把智谱订阅通道的地址混进 b.ai 分组头部（2026-09-07 用户实锤）。
   // 官方特征：上游新增的官方模型（gpt-6-astra / gpt-reserve / 未来 gpt-7）
   // 自动归入官方组，不必每次改代码（gpt-oss 是开源模型走第三方，不在此列）。
   if (customGroupMap.value[slug]) return customGroupMap.value[slug];
   if (/^(?:gpt-\d|gpt-reserve|codex-)/i.test(slug)) return DEFAULT_GROUPS[0].name;
-  const dn = String(displayName || '');
-  const slash = dn.indexOf('/');
-  if (slash > 0) return dn.slice(0, slash).trim();
+  const viaTarget = targetGroupName(target);
+  if (viaTarget) return viaTarget;
   return defaultGroupBySlug.get(slug) || OTHER_GROUP_NAME;
 }
 function dotClassOf(groupName) {
@@ -1418,14 +1466,18 @@ const allModels = ref([]);
 const modelGroups = computed(() => {
   const byName = new Map();
   for (const m of allModels.value) {
-    const name = groupOf(m.slug, m.displayName);
+    const name = groupOf(m.slug, m.displayName, m.target);
     if (!byName.has(name)) byName.set(name, { name, dotClass: dotClassOf(name), models: [] });
     byName.get(name).models.push(m);
   }
-  // 预置组按声明顺序，自定义组按名称排最后出现，其余归「其他」
+  // 预置组按声明顺序，自定义组按名称排，通道派生组（zhipu/deepseek/b.ai 等，不在
+  // 上两者名单里）按名称排在其后，「其他」永远最后（审查 P2-1：通道派生组不许沉底）
   const customNames = [...new Set(Object.values(customGroupMap.value))]
     .filter((name) => !defaultDotByName.has(name) && name !== OTHER_GROUP_NAME).sort();
-  const order = [...DEFAULT_GROUPS.map((g) => g.name), ...customNames, OTHER_GROUP_NAME];
+  const channelNames = [...byName.keys()].filter((name) => (
+    !defaultDotByName.has(name) && !customNames.includes(name) && name !== OTHER_GROUP_NAME
+  )).sort();
+  const order = [...DEFAULT_GROUPS.map((g) => g.name), ...customNames, ...channelNames, OTHER_GROUP_NAME];
   const rank = new Map(order.map((name, index) => [name, index]));
   return [...byName.values()].sort((a, b) => (rank.get(a.name) ?? 98) - (rank.get(b.name) ?? 98));
 });
@@ -1572,8 +1624,8 @@ function openEdit(m) {
     slug: m.slug,
     display_name: m.displayName || m.slug,
     description: m.description || '',
-    // 回显当前生效分组（自定义优先，其次预置基调）；清空保存=回到自动分组
-    group: groupOf(m.slug, m.displayName),
+    // 回显当前生效分组（自定义优先，其次路由通道厂商短名/预置基调）；清空保存=回到自动分组
+    group: groupOf(m.slug, m.displayName, m.target),
     default_reasoning_level: options.includes(rawLevel) ? rawLevel : '',
     context_window: m.contextWindow || null,
     auto_compact_token_limit: m.autoCompactTokenLimit || null,
@@ -1903,8 +1955,8 @@ async function handlePrefixPlatform(mode) {
     const res = await prefixModelPlatform(mode);
     ElMessage.success(
       res?.changed > 0
-        ? `已${mode === 'add' ? '加' : '去'}前缀 ${res.changed} 个模型；重启 Codex 后下拉菜单生效`
-        : '无需变更（已加/已去前缀或无可匹配目标）',
+        ? `${mode === 'rebuild' ? '已重算' : mode === 'add' ? '已加' : '已去'}前缀 ${res.changed} 个模型；重启 Codex 后下拉菜单生效`
+        : '无需变更（前缀已一致或无可匹配目标）',
     );
     await loadModels();
   } catch { /* 错误提示由请求拦截器统一处理 */ } finally {
