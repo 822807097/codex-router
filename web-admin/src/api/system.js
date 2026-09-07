@@ -190,3 +190,12 @@ export function applyUpdate(data) {
     timeout: 120_000,
   });
 }
+
+/** 面板构建指纹：web/ 产物是否与当前面板源码一致（发版忘重新构建时面板警告） */
+export function getPanelBuild(config = {}) {
+  return request({
+    url: '/panel-build',
+    method: 'get',
+    ...config,
+  });
+}

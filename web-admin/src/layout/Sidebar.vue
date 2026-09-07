@@ -29,8 +29,8 @@
               class="text-3xs font-semibold px-1.5 py-0 rounded-full bg-warning-bg text-warning-text shrink-0"
             >NEW</span>
           </div>
-          <div class="text-2xs text-secondary font-mono">
-            {{ hasUpdate ? '可更新到 v' + (updateInfo?.latest || '').replace(/^v/i, '') : 'v' + version }}
+          <div class="text-2xs text-secondary font-mono truncate">
+            {{ versionLabel }}
           </div>
         </div>
       </div>
@@ -85,15 +85,28 @@
 </template>
 
 <script setup>
+import { computed } from 'vue';
 import { DataAnalysis, FolderOpened, Key, Setting, Lock } from '@element-plus/icons-vue';
 
-defineProps({
+const props = defineProps({
   collapsed: { type: Boolean, default: false },
   version: { type: String, default: '' },
   hasUpdate: { type: Boolean, default: false },
   updateInfo: { type: Object, default: null },
+  // 面板构建指纹：有产物 commit 时版本号旁缀短 commit，证明面板与源码同版
+  panelBuild: { type: Object, default: null },
 });
 const emit = defineEmits(['navigate', 'check-update']);
+
+// 版本徽标：常规态「vX.Y.Z · 产物短 commit」证明面板与源码同版；
+// 有更新时不缀 commit——那是当前旧产物的 commit，缀上会被误读成更新目标的版本。
+const versionLabel = computed(() => {
+  if (props.hasUpdate) {
+    return '可更新到 v' + (props.updateInfo?.latest || '').replace(/^v/i, '');
+  }
+  const commit = props.panelBuild?.artifact?.commit || '';
+  return commit ? `v${props.version} · ${commit}` : `v${props.version}`;
+});
 
 const menuGroups = [
   {

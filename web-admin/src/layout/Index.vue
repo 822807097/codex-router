@@ -13,6 +13,7 @@
       :version="update.version"
       :has-update="update.hasUpdate"
       :update-info="update.info"
+      :panel-build="panelBuild"
       @check-update="updateDialogOpen = true"
     />
 
@@ -32,6 +33,7 @@
         :version="update.version"
         :has-update="update.hasUpdate"
         :update-info="update.info"
+        :panel-build="panelBuild"
         @navigate="drawerOpen = false"
         @check-update="handleOpenUpdate"
       />
@@ -40,6 +42,20 @@
     <el-container direction="vertical" class="flex-1 min-w-0 h-full">
       <Topbar :is-mobile="isMobile" @open-drawer="drawerOpen = true" />
       <el-main class="main-area bg-canvas">
+        <!-- 面板产物落后于源码：发版侧忘重新构建时显式提醒（小白话 + 可关闭） -->
+        <el-alert
+          v-if="panelBuild.consistent === false && !panelBuildDismissed"
+          type="warning"
+          :closable="true"
+          show-icon
+          class="panel-build-alert"
+          @close="dismissPanelBuild"
+        >
+          <template #title>
+            前端面板版本落后：当前面板构建于 {{ panelBuild.artifact?.builtAt?.slice(0, 10) || '未知时间' }}，之后面板源码有更新但未重新构建，界面可能缺少最新功能
+          </template>
+          {{ panelBuild.message || '请在服务所在机器的 web-admin 目录执行 npm install 和 npm run build 重新构建，或在管理页重新运行一键更新' }}
+        </el-alert>
         <!-- 超宽屏限宽容器：内容居中，避免信息被拉散 -->
         <div class="content-wrap">
           <router-view v-slot="{ Component }">
@@ -70,13 +86,30 @@ import Sidebar from './Sidebar.vue';
 import Topbar from './Topbar.vue';
 import UpdateDialog from '../components/UpdateDialog.vue';
 import { useBreakpoint } from '../composables/useBreakpoint.js';
-import { checkForUpdate, applyUpdate } from '../api/system.js';
+import { checkForUpdate, applyUpdate, getPanelBuild } from '../api/system.js';
 
 const { isMobile, isCompact } = useBreakpoint();
 const drawerOpen = ref(false);
 
 // ---- 版本与更新（左上角品牌区展示真实版本号；有新版本时显示 NEW 徽标） ----
 const update = ref({ version: '', hasUpdate: false, info: null, dialogOpen: false, applying: false, done: false });
+
+// ---- 面板构建指纹（web/ 产物 vs 面板源码）：不一致时顶部警告，true/null 均静默 ----
+const panelBuild = ref({ supported: false, consistent: null, artifact: null, message: '' });
+const panelBuildDismissed = ref(sessionStorage.getItem('panel-build-dismissed') === '1');
+
+function dismissPanelBuild() {
+  panelBuildDismissed.value = true;
+  sessionStorage.setItem('panel-build-dismissed', '1');
+}
+
+async function refreshPanelBuild() {
+  try {
+    const res = await getPanelBuild({ skipGlobalError: true });
+    panelBuild.value = res || panelBuild.value;
+    if (res?.consistent !== false) sessionStorage.removeItem('panel-build-dismissed');
+  } catch { /* 指纹校验是旁路能力，失败不打扰使用 */ }
+}
 
 async function refreshUpdateInfo() {
   try {
@@ -97,10 +130,10 @@ async function refreshUpdateInfo() {
   } catch { /* 网络不可用时保持静默，不打扰首次使用 */ }
 }
 refreshUpdateInfo();
-// 每 30 分钟自动复查一次新版本（有更新时侧栏品牌区显示 NEW 徽标）
+refreshPanelBuild();
+// 每 30 分钟自动复查一次新版本与面板新鲜度（有更新时侧栏品牌区显示 NEW 徽标）
 setInterval(refreshUpdateInfo, 30 * 60 * 1000);
-// 每 30 分钟自动复查一次新版本（有更新时侧栏品牌区显示 NEW 徽标）
-setInterval(refreshUpdateInfo, 30 * 60 * 1000);
+setInterval(refreshPanelBuild, 30 * 60 * 1000);
 
 function skipThisSession() {
   // 本次会话不再自动弹（侧栏 NEW 徽标保留）；下次打开/刷新面板仍会提示
@@ -145,6 +178,11 @@ function handleOpenUpdate() {
   width: 100%;
   max-width: 1440px;
   margin: 0 auto;
+}
+/* 面板产物过期警告：与下方内容同宽，留出呼吸间距 */
+.panel-build-alert {
+  max-width: 1440px;
+  margin: 0 auto 1rem;
 }
 @media (max-width: 767.98px) {
   .main-area {
