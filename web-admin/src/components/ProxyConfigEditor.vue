@@ -1,5 +1,8 @@
 <template>
-  <div class="proxy-config-editor space-y-2">
+  <!-- w-full 必须挂在根节点：本组件在 el-form-item__content（flex 容器）里作为
+       普通 div 子项会收缩到内容宽（触发器缩成小方块、下拉浮层跟着变窄条），
+       内部 el-select 的 w-full 只是这个窄 div 的 100%，救不回来（2026-09-07 实锤） -->
+  <div class="proxy-config-editor w-full space-y-2">
     <!-- 代理方式下拉：直连 / 全局代理 / 自定义代理 -->
     <el-select v-model="mode" placeholder="选择代理方式" :size="size" class="w-full">
       <el-option label="直连（不走代理）" value="direct" />
