@@ -346,6 +346,9 @@
         </el-form-item>
       </el-form>
       <template #footer>
+        <div v-if="desktopSaving" class="text-xs text-warning-text mb-2 text-left">
+          {{ desktopApplyStage }}
+        </div>
         <el-button @click="desktopDialogOpen = false">取消</el-button>
         <el-button type="primary" :loading="desktopSaving" @click="applyDesktopRouter">应用并接入路由</el-button>
       </template>
@@ -881,6 +884,7 @@ onMounted(() => {
 // ---- Codex 桌面端接入（一键官方直连 / 一键接入路由 + 模型动态加载） ----
 const desktopLoading = ref(false);
 const desktopSaving = ref(false);
+const desktopApplyStage = ref('');
 const desktopRestoring = ref(false);
 const desktopRestarting = ref(false);
 const desktopSyncing = ref(false);
@@ -980,17 +984,50 @@ async function applyDesktopRouter() {
     );
   } catch { return; }
   desktopSaving.value = true;
+  // 分阶段进度提示：接入需拉取所有绑定账号的上游模型（谷歌接口较慢，约 1 分钟），
+  // 没有进度说明用户会以为卡死。按真实耗时阶段推进文案。
+  const stages = [
+    { at: 0, text: '正在接入：拉取绑定账号（ChatGPT / Claude / 谷歌）的上游模型清单…' },
+    { at: 12, text: '仍在拉取上游模型…谷歌账号接口较慢（会自动重试），请耐心等待' },
+    { at: 30, text: '即将完成：正在写入桌面端配置与模型目录…' },
+    { at: 50, text: '快好了：如仍无响应请再等几秒，完成后会自动提示并引导重启桌面端' },
+  ];
+  let stageIdx = 0;
+  desktopApplyStage.value = stages[0].text;
+  const stageTimer = setInterval(() => {
+    const sec = Math.floor((Date.now() - applyStart) / 1000);
+    while (stageIdx + 1 < stages.length && sec >= stages[stageIdx + 1].at) stageIdx += 1;
+    desktopApplyStage.value = stages[stageIdx].text;
+  }, 1000);
+  const applyStart = Date.now();
   try {
     const res = await applyCodexDesktopRouter({
       slugs,
       defaultModel: desktopDefaultModel.value,
       apiKeyAuth: desktopApiKeyAuth.value,
     });
-    ElMessage.success(res.message || '已接入路由');
+    clearInterval(stageTimer);
+    desktopApplyStage.value = '接入成功，正在自动重启桌面端使配置生效…';
+    // 自动重启：桌面端只在启动时读配置，不重启用户会以为没生效/卡死
+    let restarted = false;
+    try {
+      const rs = await restartCodexDesktopApp();
+      restarted = !!(rs && (rs.ok ?? true));
+    } catch { restarted = false; }
+    ElMessage.success(
+      (res.message || '已接入路由')
+        + (restarted ? '；桌面端已自动重启，约 5 秒后重新打开' : '；桌面端自动重启失败，请手动完全退出并重开'),
+    );
     desktopDialogOpen.value = false;
     await loadDesktopState();
-    await autoRestartDesktopPrompt();
-  } catch { /* 拦截器提示 */ } finally {
+  } catch (err) {
+    clearInterval(stageTimer);
+    const message = err?.response?.data?.error?.message || err?.message || '';
+    if (message.includes('谷歌')) {
+      ElMessage.warning(`接入较慢或失败：${message}（谷歌接口超时属已知情况，可直接重试）`);
+    }
+  } finally {
+    clearInterval(stageTimer);
     desktopSaving.value = false;
   }
 }

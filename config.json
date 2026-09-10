@@ -14,8 +14,14 @@
   },
   "heartbeatMs": 15000,
   "maxRequestBytes": 67108864,
-  "maxConcurrentRequests": 8,
-  "maxBufferedRequestBytes": 134217728,
+  "maxConcurrentRequests": 16,
+  "maxBufferedRequestBytes": 268435456,
+  "upstreamConnectionPool": {
+    "_comment": "上游 keep-alive 连接池：maxPerTarget 单目标最多复用连接数、maxTotal 全局总连接上限、idleMs 空闲多少毫秒后回收（免每次请求重付 TCP+TLS 握手，走代理时更明显）。2026-09-07 并发韧性修复从 4/24/15 秒上调",
+    "maxPerTarget": 8,
+    "maxTotal": 64,
+    "idleMs": 75000
+  },
   "providerPool": {
     "_comment": "同一模型配置多条同 wireApi target 时记录成功供应商；stateDomain 只允许相同 wireApi 共享，Chat/Responses 始终分域；亲和键仅保存 SHA-256",
     "maxEntries": 2048,
@@ -78,6 +84,17 @@
       "viaProxy": true,
       "vision": true,
       "wireApi": "responses"
+    },
+    {
+      "_comment": "ChatGPT 网页会话通道：模型名带 web- 前缀走网页对话额度池（与 Codex 额度池独立）。$1 = match 捕获组，web-gpt-5-6 → 上游 slug gpt-5-6；上游清单用账号卡「拉取上游可用模型」同步",
+      "match": "^web-(.+)$",
+      "name": "chatgpt-web",
+      "platform": "chatgpt-web",
+      "host": "chatgpt.com",
+      "viaProxy": true,
+      "vision": false,
+      "wireApi": "chat",
+      "upstreamModel": "$1"
     },
     {
       "_comment": "DeepSeek V4 Flash 系（含 vision-exp 等变体）官方原生 Responses，优先保留原生事件和工具语义；国内默认直连",
@@ -479,7 +496,7 @@
     }
   ],
   "modelContext": {
-    "_comment": "路由启动时写回 models.json，让桌面端做滑动窗口/压缩，避免每轮全量重发历史。slugs 命中的模型用全局 contextWindow/autoCompactTokenLimit；overrides 按精确 slug 字段级覆盖（缺省字段回落全局值，不在 slugs 中也生效）。官方模型只收紧压缩阈值（原生 240k→128k，窗口保持目录原生 272k 不虚标），把官方通道每轮全量重发的输入封顶砍半；glm-5.3 目录暂无此 slug，接入后即刻生效",
+    "_comment": "路由启动时写回 models.json，让桌面端做滑动窗口/压缩，避免每轮全量重发历史。slugs 命中的模型用全局 contextWindow/autoCompactTokenLimit；overrides 按精确 slug 字段级覆盖（缺省字段回落全局值，不在 slugs 中也生效）。官方模型只收紧压缩阈值（原生 240k→128k，窗口保持目录原生 272k 不虚标），把官方通道每轮全量重发的输入封顶砍半；glm-5.3 目录暂无此 slug，接入后即刻生效。gpt-6-astra 例外（2026-09-08）：官方目录原生窗口 272k、官方上限 max_context_window 872k，窗口放开到官方上限缓解压缩过频，压缩 400k 收口（对齐全局 1M 级约定，会话实际规模仍远低于上限保质量）",
     "enabled": true,
     "contextWindow": 1000000,
     "autoCompactTokenLimit": 400000,
@@ -541,6 +558,11 @@
         "slug": "mimo-v2.5",
         "contextWindow": 700000,
         "autoCompactTokenLimit": 560000
+      },
+      {
+        "slug": "gpt-6-astra",
+        "contextWindow": 872000,
+        "autoCompactTokenLimit": 400000
       }
     ]
   },

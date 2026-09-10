@@ -115,11 +115,11 @@ export function getCodexAuthIdentity() {
 /**
  * 订阅账号真实额度：ChatGPT=5h/周窗口 used% + 重置时间；谷歌=本地计数+说明。
  */
-export function getAccountQuota(id) {
+export function getAccountQuota(id, { force = false } = {}) {
   return request({
     url: '/accounts/quota',
     method: 'get',
-    params: { id },
+    params: force ? { id, force: 1 } : { id },
     timeout: 45_000,
   });
 }

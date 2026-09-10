@@ -87,3 +87,7 @@ docs/plan-*.md
 
 # 内部计划文档（upstream 私用，不入库）
 docs/plans/
+
+# 看门狗/调试运行时产物
+scripts/.watchdog-state
+.freeze-test/

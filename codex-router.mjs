@@ -39,6 +39,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import v8 from 'node:v8';
 import { fileURLToPath } from 'node:url';
 import { GoalCheckpointStore } from './lib/goal-checkpoint.mjs';
 import { resolveOAuthViaProxy } from './lib/provider-adapters.mjs';
@@ -46,7 +47,10 @@ import { ProviderPool } from './lib/provider-pool.mjs';
 import { ResponseToolHistoryStore } from './lib/response-history.mjs';
 import { RequestBudget } from './lib/request-budget.mjs';
 import { createRequestLogStore } from './lib/request-log.mjs';
-import { rawHttpsRequest } from './lib/transport.mjs';
+import {
+  configureConnectionPool,
+  rawHttpsRequest,
+} from './lib/transport.mjs';
 import {
   RouterConfigError,
   formatConfigIssues,
@@ -73,7 +77,13 @@ import { createCredentialsStore, createCredentialsVault } from './lib/auth/crede
 import { refreshGoogleTokens } from './lib/auth/google-sub-auth.mjs';
 import { refreshOpenAiTokens } from './lib/auth/openai-sub-auth.mjs';
 import { refreshClaudeTokens } from './lib/auth/claude-sub-auth.mjs';
-import { getDatabase, dbListAccounts, dbSaveAccount, dbRecordTokenLog, dbPruneTokenLogs } from './lib/db.mjs';
+import {
+  getDatabase,
+  dbListAccounts,
+  dbSaveAccount,
+  dbPruneTokenLogs,
+  createTokenLogBatchWriter,
+} from './lib/db.mjs';
 import { createApiKeyStore } from './lib/api-keys.mjs';
 import {
   computeCheckpointNamespace,
@@ -158,6 +168,18 @@ const REFRESH_SKEW_SECONDS = ROUTER_OAUTH.refreshSkewSeconds;
 // envKey: API key 所在环境变量名（官方通道不用，走 auth.json）
 // 所有规则已经过预检并按原顺序编译；非法规则会在服务监听前聚合退出。
 const TARGETS = preparedConfig.targets;
+// 上游 keep-alive 连接池上限（2026-09-07 并发韧性修复）：config.upstreamConnectionPool
+// 可覆盖传输层内置默认（8/64/75s）；必须在任何上游请求发生前应用。
+{
+  const upstreamPool = preparedConfig.runtime.upstreamPool;
+  if (upstreamPool) {
+    configureConnectionPool({
+      perTarget: upstreamPool.maxPerTarget,
+      maxTotal: upstreamPool.maxTotal,
+      idleMs: upstreamPool.idleMs,
+    });
+  }
+}
 const providerPool = new ProviderPool(TARGETS, cfg.providerPool);
 const responseHistory = new ResponseToolHistoryStore(cfg.responseHistory);
 // 请求/响应查看器：内存环形日志（管理面板可视化真实请求与回复）
@@ -193,6 +215,37 @@ const flog = (event) => {
   diagnosticLog.write(event);
 };
 
+// ---------- 事件循环延迟探针（默认 5s，ROUTER_LAG_PROBE_MS=0 关闭） ----------
+// 冻结类事故（2026-09-08/09 两次：进程静默、定时器全失效）需要证据：
+// 按固定间隔测量事件循环延迟并落 flog，冻结前最后一次采样值 + 冻结后缺失
+// 即证明「事件循环被同步卡住」并给出卡住前的内存/CPU/连接数快照。
+const lagProbeMs = process.env.ROUTER_LAG_PROBE_MS !== undefined
+  ? Number(process.env.ROUTER_LAG_PROBE_MS)
+  : 5000;
+let lagLastAt = 0;
+if (lagProbeMs > 0 && typeof flog === 'function') {
+  const lagProbe = () => {
+    const now = Date.now();
+    const lag = lagLastAt ? Math.max(0, now - lagLastAt - lagProbeMs) : 0;
+    lagLastAt = now;
+    try {
+      flog({
+        event: 'event_loop_lag',
+        lag_ms: lag,
+        rss_mb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+        heap_used_mb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        heap_total_mb: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+        heap_limit_mb: Math.round(v8.getHeapStatistics().heap_size_limit / 1024 / 1024),
+        external_mb: Math.round(process.memoryUsage().external / 1024 / 1024),
+        buffers_mb: Math.round((process.memoryUsage().arrayBuffers || 0) / 1024 / 1024),
+        conns: server ? server._connections || 0 : 0,
+      });
+    } catch { /* 探针自身不得干扰 */ }
+    setTimeout(lagProbe, lagProbeMs).unref?.();
+  };
+  setTimeout(lagProbe, lagProbeMs).unref?.();
+}
+
 // ---------- envKey 热更新源 ----------
 // 进程环境是启动快照；Windows 下 setx 写入注册表后运行中的进程看不到新值。
 // 上游返回 401/429（认证失效/额度耗尽）时路由会触发 refreshNow 刷新，
@@ -202,16 +255,33 @@ const envKeySource = createEnvKeySource({
 });
 const getEnvKey = (name) => envKeySource.getKey(name);
 
-// ---------- 进程级致命异常 ----------
-// 未知异常可能已经破坏共享状态，不能记录后假装健康；停止接收新请求并排空已有连接。
+// ---------- 进程级致命异常（两段式熔断，2026-09-07 并发韧性修复） ----------
+// 请求级异常已在 server 分发层隔离成单请求 502，落到这里的只剩漏网异常。
+// 单次漏网不再整进程退出——旧逻辑任何一次坏流都会杀掉全部并发对话（正是
+// 「多任务同时重连」的主因）；60 秒窗口内累计 ≥5 次才视为共享状态可能已损坏，
+// 触发优雅停机。启动期（尚未 listen）保持原样退出。
 let server = null;
+const FATAL_ERROR_WINDOW_MS = 60_000;
+const FATAL_ERROR_LIMIT = 5;
+const fatalErrorTimestamps = [];
+let fatalShutdownScheduled = false;
 function handleFatalProcessError(kind, error) {
-  log(`${kind}:`, error?.stack || error?.message || String(error));
-  if (!server) {
-    process.exitCode = 1;
-    return;
+  const now = Date.now();
+  while (fatalErrorTimestamps.length && now - fatalErrorTimestamps[0] > FATAL_ERROR_WINDOW_MS) {
+    fatalErrorTimestamps.shift();
   }
-  gracefulExit(1);
+  fatalErrorTimestamps.push(now);
+  log(`${kind} (熔断窗口 ${fatalErrorTimestamps.length}/${FATAL_ERROR_LIMIT}):`, error?.stack || error?.message || String(error));
+  if (!server) {
+    // 启动期（尚未 listen）：无可排空的服务，半初始化状态不能继续存活，直接退出
+    //（process.exitCode 只在事件循环自然排空时生效，对卡住的启动期不适用）。
+    process.exit(1);
+  }
+  if (fatalErrorTimestamps.length >= FATAL_ERROR_LIMIT && !fatalShutdownScheduled) {
+    fatalShutdownScheduled = true;
+    log('进程熔断触发：漏网异常过密，共享状态可能已损坏，优雅停机');
+    gracefulExit(1);
+  }
 }
 process.on('uncaughtException', (error) => handleFatalProcessError('uncaughtException', error));
 process.on('unhandledRejection', (error) => handleFatalProcessError('unhandledRejection', error));
@@ -275,10 +345,14 @@ const { relayNonTextParts } = createVisionRelay({
 
 // ---------- Token 用量追踪器（总量与模型明细监控） ----------
 // 每条真实使用记录同时写入 SQLite token_logs，Dashboard 统计从此表读取（真实调用数据）
+// token_logs 微批落库（2026-09-07 并发韧性修复）：内存聚合 5 秒/满 200 条后
+// 单事务批量写入，替代逐条同步 insert——node:sqlite 是同步 API，并发长流下
+// 逐条写会卡事件循环；统计旁路容忍 ≤5s 延迟，崩溃最多丢一个周期的统计。
+const tokenLogBatchWriter = createTokenLogBatchWriter({ flushIntervalMs: 5000, maxPending: 200 });
 const tokenTracker = createTokenTracker({
   storagePath: path.join(path.dirname(CONFIG_PATH), 'token-usage.json'),
   onRecord: (record) => {
-    try { dbRecordTokenLog(record); } catch { /* 统计旁路不得影响路由请求 */ }
+    try { tokenLogBatchWriter.add(record); } catch { /* 统计旁路不得影响路由请求 */ }
   },
 });
 // token_logs 只增不缩：启动时清理超过保留期的记录，防止 router.db 无限膨胀
@@ -357,6 +431,18 @@ try {
   console.warn(`[accounts] 从 SQLite 恢复订阅账号失败: ${err.message}`);
 }
 
+// ---------- W1 主动配额感知调度器（2026-09-08） ----------
+// 周期探测零流量官方订阅账号的额度窗口（复用最小请求探测，响应头到达即断开），
+// 兼职 suspect 账号恢复探活；quotaProbe.intervalMinutes 可在 config 覆盖周期。
+import { createAccountQuotaScheduler } from './lib/account-quota-scheduler.mjs';
+const quotaScheduler = createAccountQuotaScheduler({
+  authManager,
+  log: (event) => flog(event),
+  intervalMinutes: cfg.quotaProbe?.intervalMinutes || cfg.runtime?.quotaProbe?.intervalMinutes,
+  proxy: V2RAY_PROXY,
+});
+quotaScheduler.start();
+
 // ---------- 订阅账号 Token 自动续期（google / openai / claude） ----------
 // 账号级代理优先；未单独配置的账号走全局代理（出海通道）。
 function resolveAccountProxy(account) {
@@ -374,6 +460,22 @@ authManager.registerRefresher('google', async ({ account }) => {
   };
 });
 authManager.registerRefresher('openai', async ({ account }) => {
+  const tokens = await refreshOpenAiTokens({
+    refreshToken: account.credentials.refreshToken,
+    proxy: resolveAccountProxy(account),
+  });
+  return {
+    credentials: {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
+    },
+    expiresAt: Date.now() + Math.max(60, tokens.expiresIn - 300) * 1000,
+  };
+});
+// 网页会话通道（chatgpt-web）与 openai 同源令牌体系：刷新端点与客户端一致，直接复用，
+// 网页账号的 access_token 也随临期自动续期（不再是「过期后重新导入」的一次性凭据）
+authManager.registerRefresher('chatgpt-web', async ({ account }) => {
   const tokens = await refreshOpenAiTokens({
     refreshToken: account.credentials.refreshToken,
     proxy: resolveAccountProxy(account),
@@ -564,23 +666,56 @@ try {
   process.stderr.write('[catalog] 模型目录启动快照失败（catalog_snapshot_invalid）\n');
   process.exit(1);
 }
+// 请求级异常收敛（2026-09-07 并发韧性修复）：把分发与处理异常变成单请求
+// 502/断流，绝不升级成进程熔断——一次坏请求只影响自己，其余并发对话照常。
+function failRequestResponse(clientRes, error, stage) {
+  log(stage, error?.stack || error?.message || String(error));
+  if (!clientRes.headersSent && !clientRes.destroyed && !clientRes.writableEnded) {
+    try {
+      clientRes.writeHead(502, { 'content-type': 'application/json' });
+      clientRes.end(JSON.stringify({
+        error: { code: 'request_handler_exception', message: '路由内部错误，本请求已中止（其他请求不受影响）' },
+      }));
+    } catch { /* 客户端已断开 */ }
+  } else if (!clientRes.writableEnded) {
+    try { clientRes.destroy(); } catch { /* 已销毁 */ }
+  }
+}
+
 server = http.createServer((clientReq, clientRes) => {
-  const pathname = (clientReq.url || '/').split('?')[0];
-  // 外部图像生成桥接（OpenAI 兼容，独立于主路由管线）。
-  // 图片端点在主处理器之前分发，必须执行与 /v1/* 相同的 API key 门控：
-  // 存在未吊销 key 时强制鉴权，否则任何本地进程都能烧订阅生图额度。
-  if (clientReq.method === 'POST' && (pathname === '/v1/images/generations' || pathname === '/images/generations')) {
-    if (!imageRequestAuthorized(clientReq, clientRes)) return;
-    handleImageRequest(clientReq, clientRes, 'generate');
-    return;
+  try {
+    const pathname = (clientReq.url || '/').split('?')[0];
+    // 外部图像生成桥接（OpenAI 兼容，独立于主路由管线）。
+    // 图片端点在主处理器之前分发，必须执行与 /v1/* 相同的 API key 门控：
+    // 存在未吊销 key 时强制鉴权，否则任何本地进程都能烧订阅生图额度。
+    if (clientReq.method === 'POST' && (pathname === '/v1/images/generations' || pathname === '/images/generations')) {
+      if (!imageRequestAuthorized(clientReq, clientRes)) return;
+      // handleImageRequest 是 async：reject 必须收敛到本请求，不进熔断计数。
+      handleImageRequest(clientReq, clientRes, 'generate')
+        .catch((error) => failRequestResponse(clientRes, error, 'image bridge error:'));
+      return;
+    }
+    if (clientReq.method === 'POST' && (pathname === '/v1/images/edits' || pathname === '/images/edits')) {
+      if (!imageRequestAuthorized(clientReq, clientRes)) return;
+      handleImageRequest(clientReq, clientRes, 'edit')
+        .catch((error) => failRequestResponse(clientRes, error, 'image bridge error:'));
+      return;
+    }
+    // routerHandler 是 async：逃逸异常只以 promise rejection 出现，不 .catch
+    // 会直达 unhandledRejection 熔断计数，而非单请求 502（对抗审查 P1-2）。
+    routerHandler(clientReq, clientRes)
+      .catch((error) => failRequestResponse(clientRes, error, 'request dispatch error:'));
+  } catch (error) {
+    failRequestResponse(clientRes, error, 'request dispatch error:');
   }
-  if (clientReq.method === 'POST' && (pathname === '/v1/images/edits' || pathname === '/images/edits')) {
-    if (!imageRequestAuthorized(clientReq, clientRes)) return;
-    handleImageRequest(clientReq, clientRes, 'edit');
-    return;
-  }
-  routerHandler(clientReq, clientRes);
 });
+
+// 客户端 keep-alive 调优（2026-09-07 并发韧性修复）：Node 默认 5 秒就关闭空闲
+// 连接，客户端复用刚被关掉的连接会立刻 ECONNRESET 重连——多任务并发时表现
+// 为「重新连接」。72s 覆盖常见客户端连接池复用间隔；headersTimeout 必须大于
+// keepAliveTimeout，否则慢请求头会被提前掐断。
+server.keepAliveTimeout = 72_000;
+server.headersTimeout = 80_000;
 
 // 与 routerHandler 同一套 API key 门控（多工具客户端：Bearer 或 x-api-key）。
 function imageRequestAuthorized(req, res) {
@@ -773,11 +908,17 @@ function gracefulExit(exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   log('graceful shutdown: 释放端口，排空在跑任务');
+  // 停掉额度探测调度器：排空期间不再发起新的探测请求
+  try { quotaScheduler.stop(); } catch { /* 旁路 */ }
   try { server.closeIdleConnections(); } catch { /* 旧版 Node 无此方法 */ }
   try {
     server.close(async () => {
       try { await checkpointPersistence.close(); } catch (error) {
         log('checkpoint persistence close failed:', error.message);
+      }
+      // token_logs 微批收尾：把内存中未落库的统计冲进 SQLite 再退出。
+      try { tokenLogBatchWriter.close(); } catch (error) {
+        log('token log batch close failed:', error.message);
       }
       await Promise.all([diagnosticLog.flush(), contextDiagnosticLog.flush()]);
       log('在跑任务已排空，退出');

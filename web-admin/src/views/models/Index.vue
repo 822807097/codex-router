@@ -128,19 +128,26 @@
             :key="m.slug"
             class="py-3 px-3 rounded-lg transition-colors hover:bg-surface-2 flex items-center gap-3"
           >
-            <!-- 批量选择（官方模型不可删，无勾选框） -->
-            <el-checkbox
-              v-if="!isOfficialModel(m)"
-              :model-value="selectedForDelete.has(m.slug)"
-              class="shrink-0"
-              @change="toggleSelected(m.slug, $event)"
-            />
+            <!-- 批量删除选择（平台订阅自动管理的模型不可删，无勾选框） -->
+            <el-tooltip
+              :content="isAccountManaged(m) ? '平台订阅自动管理的模型不可删除（拉取会自动恢复）' : '勾选后可批量删除该模型'"
+              placement="top"
+            >
+              <el-checkbox
+                v-if="!isAccountManaged(m)"
+                :model-value="selectedForDelete.has(m.slug)"
+                class="shrink-0"
+                @change="toggleSelected(m.slug, $event)"
+              />
+              <span v-else class="inline-flex w-4 shrink-0 justify-center text-secondary/40 select-none">•</span>
+            </el-tooltip>
             <!-- 模型信息：名称行 + 规格行（轻量文字，不再用带框标签） -->
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2 min-w-0">
                 <span class="font-semibold text-primary text-sm truncate">{{ m.displayName || m.slug }}</span>
                 <span class="text-xs text-secondary font-mono truncate">{{ m.slug }}</span>
-                <el-tag v-if="isOfficialModel(m)" size="small" effect="plain" type="warning" class="text-3xs shrink-0">账号自带</el-tag>
+                <el-tag v-if="isAccountManaged(m)" size="small" effect="plain" type="warning" class="text-3xs shrink-0">账号自带</el-tag>
+                <el-tag v-if="isWebPoolModel(m)" size="small" effect="plain" type="danger" class="text-3xs shrink-0">网页池</el-tag>
               </div>
               <div
                 class="text-xs text-secondary mt-0.5 flex items-center gap-3"
@@ -185,9 +192,9 @@
                 <el-icon class="mr-1"><Lightning /></el-icon>
                 测试
               </el-button>
-              <!-- 官方账号绑定模型：仅可编辑客户端默认参数；自定义模型可编辑/删除（图标按钮 + 悬停提示） -->
+              <!-- 平台订阅自动管理的模型：仅可编辑客户端默认参数；自定义模型可编辑/删除（图标按钮 + 悬停提示） -->
               <el-tooltip
-                v-if="isOfficialModel(m)"
+                v-if="isAccountManaged(m)"
                 content="编辑客户端默认参数（思考档位 / 上下文）"
                 placement="top"
                 :show-after="200"
@@ -196,7 +203,7 @@
                   <el-icon><Setting /></el-icon>
                 </el-button>
               </el-tooltip>
-              <template v-if="!isOfficialModel(m)">
+              <template v-if="!isAccountManaged(m)">
                 <el-tooltip content="编辑模型" placement="top" :show-after="200">
                   <el-button size="small" plain @click="openEdit(m)">
                     <el-icon><Edit /></el-icon>
@@ -1441,20 +1448,25 @@ function targetGroupName(target) {
   return name.split('-')[0] || '';
 }
 function groupOf(slug, displayName = '', target = '') {
-  // 优先级：用户显式设置的分组 > 官方特征 > 实际路由通道的厂商短名 > 预置 slug 表 > 其他。
+  // 优先级：用户显式设置的分组 > 网页池 > 官方特征 > 实际路由通道的厂商短名 > 预置 slug 表 > 其他。
   // 分组只看模型真实绑定的通道（slug 正则命中的 target），绝不从显示名前缀反推——
   // 显示名前缀是历史残留（zhipu-flash-plan 至今显示为 b.ai/glm-5.3-flash），按它归组
   // 会把智谱订阅通道的地址混进 b.ai 分组头部（2026-09-07 用户实锤）。
   // 官方特征：上游新增的官方模型（gpt-6-astra / gpt-reserve / 未来 gpt-7）
   // 自动归入官方组，不必每次改代码（gpt-oss 是开源模型走第三方，不在此列）。
   if (customGroupMap.value[slug]) return customGroupMap.value[slug];
+  // 网页额度池（ChatGPT Web 会话通道）：与官方 API 模型分开成组，不再混进官方基础模型
+  if (target === 'chatgpt-web' || /^web-/i.test(slug)) return WEB_POOL_GROUP_NAME;
   if (/^(?:gpt-\d|gpt-reserve|codex-)/i.test(slug)) return DEFAULT_GROUPS[0].name;
   const viaTarget = targetGroupName(target);
   if (viaTarget) return viaTarget;
   return defaultGroupBySlug.get(slug) || OTHER_GROUP_NAME;
 }
+const WEB_POOL_GROUP_NAME = '网页池 (ChatGPT Web)';
+const WEB_POOL_GROUP_DOT = 'bg-chart-4';
 function dotClassOf(groupName) {
   if (defaultDotByName.has(groupName)) return defaultDotByName.get(groupName);
+  if (groupName === WEB_POOL_GROUP_NAME) return WEB_POOL_GROUP_DOT;
   if (groupName === OTHER_GROUP_NAME) return OTHER_GROUP_DOT;
   const customNames = [...new Set(Object.values(customGroupMap.value))];
   const idx = customNames.indexOf(groupName);
@@ -1721,6 +1733,18 @@ const OFFICIAL_SLUGS = new Set(DEFAULT_GROUPS[0].slugs);
 // 官方账号绑定模型（OpenAI Frontier 等）：随账号/套餐自带，只读——不可编辑/删除/批量勾选
 function isOfficialModel(m) {
   return OFFICIAL_SLUGS.has(m && m.slug);
+}
+
+// 平台订阅自动管理的模型：官方 slug 表 + 上游自动拉取的账号模型（gpt-6-astra /
+// gpt-reserve / gpt-5.3-codex-spark / gpt-5.5-wm 等订阅拉取带回的条目）。这些由
+// 一键拉取自动加入与更新，不应手工删除——删了下次拉取又会回来（2026-09-10 用户实锤）
+function isAccountManaged(m) {
+  return isOfficialModel(m) || /^(?:gpt-\d|gpt-reserve|codex-)/i.test(m && m.slug);
+}
+
+// 网页额度池模型（ChatGPT 网页会话通道，slug 带 web- 前缀）：与官方 API 模型区分展示
+function isWebPoolModel(m) {
+  return (m && m.target) === 'chatgpt-web' || /^web-/i.test(m && m.slug);
 }
 
 // OAuth 订阅授权模型（谷歌 AI Pro 等）：走账号授权而非 API Key，不显示密钥警告

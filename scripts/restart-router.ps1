@@ -3,6 +3,13 @@
 #       确认旧进程退出、端口释放后，再启动新进程接管。
 # 新版正常运行模式不暴露进程控制端点（安全设计），因此用控制台 Ctrl+C 事件触发 SIGINT。
 $ErrorActionPreference = 'Stop'
+
+# Send-CtrlC 会 FreeConsole/AttachConsole，非交互或重定向下控制台句柄可能失效，
+# Write-Host 届时抛「句柄无效 0x6」（2026-09-08 实测）——打印失败不得中断排空/强杀。
+function Say($msg, [ConsoleColor]$color = 'Gray') {
+    try { Write-Host $msg -ForegroundColor $color } catch { }
+}
+
 $port = if ($env:ROUTER_PORT) { [int]$env:ROUTER_PORT } else { 15730 }
 $here = $PSScriptRoot
 # 兼容两种目录布局（scripts/ 子目录 或 与 mjs 同目录）
@@ -44,30 +51,39 @@ $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Silent
 if ($conns) {
     $oldPids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
     foreach ($oldPid in $oldPids) {
-        Write-Host "停止旧进程 PID=$oldPid（优雅排空，在跑任务将继续完成）"
+        Say "停止旧进程 PID=$oldPid（优雅排空，在跑任务将继续完成）"
         # 1a. 兼容仍提供关闭端点的实例
         try {
             Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/_admin/shutdown" -TimeoutSec 3 | Out-Null
-            Write-Host "已通过 /_admin/shutdown 通知优雅退出"
+            Say "已通过 /_admin/shutdown 通知优雅退出"
         } catch {
             # 新版无此端点（404），继续走 Ctrl+C
         }
         # 1b. 进程仍在则发送 Ctrl+C（触发 SIGINT → gracefulExit）
         if (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {
-            if (Send-CtrlC $oldPid) { Write-Host "已发送 Ctrl+C（SIGINT）触发优雅排空" }
-            else { Write-Host "无法附加目标进程控制台，请检查进程状态" -ForegroundColor Yellow }
+            if (Send-CtrlC $oldPid) { Say "已发送 Ctrl+C（SIGINT）触发优雅排空" }
+            else { Say "无法附加目标进程控制台，请检查进程状态" Yellow }
         }
     }
-    # 1c. 等待旧进程排空退出（路由内部有 10 分钟安全阀）
-    $deadline = (Get-Date).AddSeconds(600)
+    # 1c. 等待旧进程排空退出（路由内部有 10 分钟安全阀）。
+    # 事件循环冻结的进程不响应 SIGINT（2026-09-08 实测）：优雅窗口 40 秒后
+    # 强制结束，避免 restart 卡满 600 秒超时、用户以为脚本死了。
+    $graceDeadline = (Get-Date).AddSeconds(40)
+    $forceDeadline = (Get-Date).AddSeconds(600)
     foreach ($oldPid in $oldPids) {
+        $forceStopped = $false
         while (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {
-            if ((Get-Date) -gt $deadline) { Write-Host "等待旧进程排空超时，请稍后重试" -ForegroundColor Red; exit 1 }
+            if ((Get-Date) -gt $forceDeadline) { Say "等待旧进程排空超时，请稍后重试" Red; exit 1 }
+            if (-not $forceStopped -and (Get-Date) -gt $graceDeadline) {
+                Say "PID=$oldPid 未在优雅窗口内退出（疑似事件循环冻结），强制结束" Yellow
+                Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+                $forceStopped = $true
+            }
             Start-Sleep -Milliseconds 500
         }
     }
 } else {
-    Write-Host "旧进程未运行，直接启动新进程"
+    Say "旧进程未运行，直接启动新进程"
 }
 
 # 2. 注入环境变量（从 Machine/User 读取 config 里声明的 envKey）
@@ -96,8 +112,9 @@ for ($i = 0; $i -lt 10; $i++) {
     Start-Sleep -Seconds 1
     try {
         $h = Invoke-RestMethod -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 2
-        if ($h.ok) { Write-Host "codex-router 已无感重启，监听 127.0.0.1:$port"; exit 0 }
+        if ($h.ok) { Say "codex-router 已无感重启，监听 127.0.0.1:$port"; exit 0 }
     } catch { }
 }
-Write-Host "重启后未检测到监听，请手动运行 start-router.ps1 查看报错" -ForegroundColor Red
+Say "重启后未检测到监听，请手动运行 start-router.ps1 查看报错" Red
+exit 1
 exit 1

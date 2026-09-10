@@ -34,7 +34,7 @@
       </div>
     </el-alert>
     <el-card
-      v-for="platform in platforms"
+      v-for="platform in platforms.filter((p) => !p.hidden)"
       :key="platform.provider"
       shadow="never"
       class="platform-card"
@@ -51,10 +51,17 @@
               <div class="text-xs text-secondary mt-0.5 leading-relaxed">{{ platform.subtitle }}</div>
             </div>
           </div>
-          <el-button type="primary" size="small" class="shrink-0" @click="openDialog(platform.provider)">
-            <el-icon class="mr-1"><Plus /></el-icon>
-            {{ platform.actionLabel }}
-          </el-button>
+          <div class="flex items-center gap-2 shrink-0">
+            <el-button
+              v-if="platform.provider === 'chatgpt-web'"
+              size="small"
+              @click="webImportMode = 'token'; openDialog('chatgpt-web')"
+            >导入 token</el-button>
+            <el-button type="primary" size="small" class="shrink-0" @click="webImportMode = 'oauth'; openDialog(platform.provider)">
+              <el-icon class="mr-1"><Plus /></el-icon>
+              {{ platform.actionLabel }}
+            </el-button>
+          </div>
         </div>
       </template>
 
@@ -120,7 +127,7 @@
           <div class="mt-3">
             <div class="flex items-center justify-between text-xs text-secondary mb-1.5">
               <span>额度</span>
-              <el-button size="small" text type="primary" :loading="quotaLoading[acc.id]" @click="loadQuota(acc)">刷新</el-button>
+              <el-button size="small" text type="primary" :loading="quotaLoading[acc.id]" @click="loadQuota(acc, { force: true })">刷新</el-button>
             </div>
 
             <!-- ChatGPT：按窗口实际时长展示（primary/secondary 语义随账号状态变化） -->
@@ -228,6 +235,9 @@
             <div class="text-xs text-secondary mb-2">
               可用模型（{{ fetchedModels[acc.id].length }}）——「复制」拿模型 ID，填到任意 OpenAI 兼容客户端（Base URL 用路由地址）即可使用
             </div>
+            <div v-if="acc.provider === 'chatgpt-web'" class="text-2xs text-warning-text mb-2">
+              网页会话通道的模型 ID 带 web- 前缀（如 web-gpt-5-6）——复制下方 ID 直接使用即可；不带前缀的同名模型走 ChatGPT 订阅（Codex）额度池，两条额度相互独立
+            </div>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-1.5">
               <div
                 v-for="m in fetchedModels[acc.id]"
@@ -237,11 +247,11 @@
                 <span class="font-medium text-primary text-xs truncate min-w-0" :title="m.displayName || m.name">
                   {{ m.displayName || m.name }}
                 </span>
-                <el-tooltip :content="`模型 ID：${m.name}（点击复制）`" placement="top" :show-after="200">
-                  <code class="account-model-id" @click="copyModelId(m.name)">{{ m.name }}</code>
+                <el-tooltip :content="`模型 ID：${apiModelId(acc, m.name)}（点击复制）`" placement="top" :show-after="200">
+                  <code class="account-model-id" @click="copyModelId(apiModelId(acc, m.name))">{{ apiModelId(acc, m.name) }}</code>
                 </el-tooltip>
                 <el-tooltip content="复制模型 ID" placement="top" :show-after="200">
-                  <el-button size="small" text class="!px-1 shrink-0" @click="copyModelId(m.name)">
+                  <el-button size="small" text class="!px-1 shrink-0" @click="copyModelId(apiModelId(acc, m.name))">
                     <el-icon><DocumentCopy /></el-icon>
                   </el-button>
                 </el-tooltip>
@@ -279,6 +289,12 @@
       :provider="currentProvider"
       @success="loadAllAccounts"
     />
+
+    <!-- ChatGPT 网页会话账号导入弹窗（token 粘贴，非 OAuth） -->
+    <WebAccountImportDialog
+      v-model="showWebImportModal"
+      @success="loadAllAccounts"
+    />
   </div>
 </template>
 
@@ -288,12 +304,16 @@ import ProxyConfigEditor from '../../components/ProxyConfigEditor.vue';
 import { listAccounts, deleteAccount, fetchAccountModels, testAccountModel, setupGoogleChannel, setAccountPriority, setAccountProxy, switchCodexAccount, getCodexAuthIdentity, getAccountQuota } from '../../api/accounts.js';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import OAuthDialog from './components/OAuthDialog.vue';
+import WebAccountImportDialog from './components/WebAccountImportDialog.vue';
 import AsyncContainer from '../../components/AsyncContainer.vue';
 
 const loading = ref(true);
 const loadError = ref('');
 
 const showOAuthModal = ref(false);
+const showWebImportModal = ref(false);
+// chatgpt-web 卡片主按钮 = 一键 OAuth；次级「导入 token」按钮置位时走粘贴弹窗
+const webImportMode = ref('oauth');
 const currentProvider = ref('google');
 const accounts = ref([]);
 const fetchingModelsId = ref(null);
@@ -304,6 +324,7 @@ const fetchedModelSource = reactive({});
 const platforms = [
   {
     provider: 'claude',
+    hidden: true, // 账号被封无法测试，暂时从面板隐藏（后端 OAuth/轮换功能保留，去掉 hidden 即可恢复）
     icon: 'C',
     iconClass: 'bg-brand-claude/15 text-brand-claude',
     title: 'Claude (Anthropic) 订阅管理',
@@ -329,9 +350,23 @@ const platforms = [
     actionLabel: '登录 ChatGPT 账号 (一键授权)',
     emptyHint: '暂未绑定 ChatGPT 账号，点击右上角一键授权',
   },
+  {
+    provider: 'chatgpt-web',
+    icon: 'W',
+    iconClass: 'bg-brand-openai/15 text-emerald-600',
+    title: 'ChatGPT 网页会话通道（实验）',
+    subtitle: '把 ChatGPT 网页对话额度转成 API：一键 OAuth 授权绑定（推荐，token 自动续期），也可粘贴网页版 access_token。注意：网页协议属灰区用法，请仅绑定自有账号',
+    actionLabel: '一键授权登录',
+    emptyHint: '暂未绑定网页会话账号，点击右上角一键授权登录',
+  },
 ];
 
 function openDialog(provider) {
+  // 网页会话通道两种导入方式都有：一键 OAuth（推荐）与 token 粘贴（次级按钮）
+  if (provider === 'chatgpt-web' && webImportMode.value === 'token') {
+    showWebImportModal.value = true;
+    return;
+  }
   currentProvider.value = provider;
   showOAuthModal.value = true;
 }
@@ -344,24 +379,32 @@ function statusMeta(acc) {
   // auth_expired：凭据被上游吊销（401），不会自动恢复，需重新授权（后端 markAuthExpired 标记）
   if (acc.status === 'auth_expired' || acc.status === 'expired') return { type: 'danger', label: '登录过期' };
   if (acc.status === 'cooldown') return { type: 'warning', label: 'Cooldown 429' };
+  // suspect：连续网络/服务错误后的自动退避（60 秒起步翻倍，最长 30 分钟），到期自动恢复
+  if (acc.status === 'suspect') return { type: 'warning', label: '观察中（退避恢复）' };
   return { type: 'success', label: 'Active' };
 }
 
 const expiredAccounts = computed(() =>
-  accounts.value.filter((a) => a.status === 'auth_expired' || a.status === 'expired'),
+  accounts.value.filter((a) =>
+    (a.status === 'auth_expired' || a.status === 'expired')
+    // Claude 平台订阅已暂时隐藏（账号被封无法测试），过期提醒一并屏蔽
+    && a.provider !== 'claude'),
 );
 
 // ---- 账号真实额度（ChatGPT=上游 rate_limits；谷歌=本地计数） ----
+// 点「刷新」= force 真探测（跳过缓存直打上游，60s 节流）；首屏自动拉取走缓存秒回。
 const quotaData = reactive({});
 const quotaLoading = reactive({});
-async function loadQuota(acc) {
+async function loadQuota(acc, { force = false } = {}) {
   if (quotaLoading[acc.id]) return;
   quotaLoading[acc.id] = true;
   try {
-    const res = await getAccountQuota(acc.id);
+    const res = await getAccountQuota(acc.id, { force });
     quotaData[acc.id] = res || { ok: false, error: '无响应' };
   } catch (err) {
-    quotaData[acc.id] = { ok: false, error: err.response?.data?.error?.message || err.message || '拉取失败' };
+    const message = err.response?.data?.error?.message || err.message || '拉取失败';
+    quotaData[acc.id] = { ok: false, error: message };
+    if (force && err.response?.status === 429) ElMessage.warning(message);
   } finally {
     quotaLoading[acc.id] = false;
   }
@@ -416,6 +459,11 @@ async function handleTestModel(acc, model) {
 }
 
 // 复制模型 ID（http 环境下 clipboard API 可能不可用，execCommand 兜底）
+// chatgpt-web 通道的可调用模型 ID 带 web- 前缀（路由按 ^web-(.+)$ 导流并还原上游
+// slug）；展示/复制用可调用 ID，逐模型「测试」仍传原始 slug（账号直连，不经路由）
+function apiModelId(acc, name) {
+  return acc.provider === 'chatgpt-web' ? `web-${name}` : name;
+}
 async function copyModelId(name) {
   let copied = false;
   try {
@@ -573,6 +621,12 @@ onMounted(() => {
   loadCodexIdentity();
   // ChatGPT 账号自动拉取一次真实额度（谷歌等点击刷新即可）
   setTimeout(() => loadAllQuotasFor('openai'), 800);
+  // 网页会话账号同样自动拉额度 + 已知模型清单（有账号才拉，避免空转）
+  setTimeout(() => {
+    if (accounts.value.some((a) => a.provider === 'chatgpt-web')) {
+      loadAllQuotasFor('chatgpt-web');
+    }
+  }, 1200);
 });
 </script>
 

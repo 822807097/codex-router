@@ -90,7 +90,7 @@
       <!-- loopback 模式兜底：粘贴回调链接/Code -->
       <div v-if="!isClaude && authUrlDisplay" class="border-t border-default pt-4 text-left space-y-2">
         <div class="text-2xs text-secondary">
-          {{ isProvider('openai')
+          {{ isProvider('openai') || isProvider('chatgpt-web')
             ? '若浏览器显示「无法访问 localhost:1455」属正常（回调端口被占用时会降级手动）：请复制浏览器地址栏的完整回调链接粘贴到下方提交。'
             : '浏览器授权后长时间无响应？可粘贴回调地址栏的完整链接或 Code 手动完成：' }}
         </div>
@@ -183,13 +183,14 @@ const dialogTitle = computed(() => {
     google: '添加 Google 账号 (一键授权)',
     claude: '添加 Claude 账号 (OAuth 授权)',
     openai: '添加 ChatGPT 账号 (一键授权)',
+    'chatgpt-web': '添加 ChatGPT 网页会话账号 (一键授权)',
   };
   return titles[props.provider] || '添加新账号';
 });
 
 const credentialLabel = computed(() => {
   if (props.provider === 'claude') return 'OAuth Refresh Token';
-  if (props.provider === 'openai') return 'OAuth Refresh Token';
+  if (props.provider === 'openai' || props.provider === 'chatgpt-web') return 'OAuth Refresh Token';
   return 'Refresh Token';
 });
 

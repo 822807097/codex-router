@@ -1,4 +1,4 @@
-# status-router.ps1 — 查看路由状态（PID + 健康检查）
+﻿# status-router.ps1 — 查看路由状态（PID + 健康检查）
 $port = if ($env:ROUTER_PORT) { [int]$env:ROUTER_PORT } else { 15730 }
 $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
 if ($conns) {
