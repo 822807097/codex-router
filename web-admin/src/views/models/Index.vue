@@ -898,6 +898,9 @@ function openVendorEdit(info) {
     name: info.name,
     originalName: info.name,
     targetRef: info.targetRef,
+    // 同地址的全部兄弟通道：保存地址/协议变更时一并批量更新
+    //（谷歌一键接入曾为每模型建专属通道，只改一个会路由分裂）
+    channels: Array.isArray(info.channels) && info.channels.length ? info.channels : [info],
     apiBase: info.apiBase,
     wireApi: info.wireApi || 'chat',
     proxy: editorValueFromTargetFields(info),
@@ -998,12 +1001,19 @@ async function handleSaveVendorEdit() {
     ...proxyFieldsFromEditor(vendorEdit.value.proxy),
   };
   if (endpoint.port) patch.port = endpoint.port; else patch.port = null;
-  if (newName !== vendorEdit.value.originalName) patch.name = newName;
+  // 地址/协议/代理变更要批量下发到同地址的全部兄弟通道，路由才不会分裂；
+  // 名称变更只作用于被编辑的那条通道（其余通道名字是别的模型的绑定目标）。
+  const siblings = Array.isArray(vendorEdit.value.channels) && vendorEdit.value.channels.length
+    ? vendorEdit.value.channels
+    : [{ targetRef: vendorEdit.value.targetRef }];
+  const ops = siblings.map((ch) => ({
+    kind: 'target.update',
+    targetRef: ch.targetRef,
+    patch: { ...patch, ...(ch.targetRef === vendorEdit.value.targetRef && newName !== vendorEdit.value.originalName ? { name: newName } : {}) },
+  }));
   vendorEditSaving.value = true;
   try {
-    await commitModelOperations([
-      { kind: 'target.update', targetRef: vendorEdit.value.targetRef, patch },
-    ]);
+    await commitModelOperations(ops);
     const renamedNow = newName !== vendorEdit.value.originalName;
     ElMessage.success(renamedNow
       ? '分组已更新：名称与接口配置已保存，密钥池已自动迁移到新名称；重启路由后完全生效'
@@ -1704,8 +1714,15 @@ async function handleSaveEdit() {
   if (editForm.value.default_reasoning_level) {
     patch.default_reasoning_level = editForm.value.default_reasoning_level;
   }
-  if (Number(editForm.value.context_window) > 0) {
-    patch.context_window = parseContextTokens(editForm.value.context_window);
+  // 上下文窗口：支持 k/M 简写（1M/272k）；解析失败要显式报错而不是静默丢字段
+  // （2026-09-11 审计 P0：Number("1M")=NaN 使字段整个被省略，用户却看到"已更新"）
+  if (editForm.value.context_window !== null && String(editForm.value.context_window ?? '').trim() !== '') {
+    const parsedContext = parseContextTokens(editForm.value.context_window);
+    if (!Number.isFinite(parsedContext) || parsedContext <= 0) {
+      ElMessage.warning('上下文窗口格式无法识别（示例：272000、272k、1M），未修改该字段');
+    } else {
+      patch.context_window = parsedContext;
+    }
   }
   // 压缩阈值：留空提交 null（显式无值=客户端默认策略）；填了支持 k/M 简写
   const compactRaw = String(editForm.value.auto_compact_token_limit ?? '').trim();

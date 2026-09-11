@@ -56,7 +56,7 @@
             保证任务不因历史无限膨胀而被上游拒绝。裁剪只删最旧轮次，最新上下文完整保留。
           </div>
         </el-form-item>
-        <el-button size="small" type="primary" :loading="chatGuardSaving" @click="saveChatGuard">保存服务端强制压缩设置</el-button>
+        <el-button size="small" type="primary" :loading="chatGuardSaving || compactSaving" @click="saveCompressionSettings">保存压缩设置</el-button>
       </el-form>
     </el-card>
     <!-- 视觉中继状态 -->
@@ -431,6 +431,13 @@ async function loadCompactDefault() {
     chatGuardEnabled.value = res?.enabled !== false;
     chatGuardInput.value = res?.maxContextTokens ? String(res.maxContextTokens) : '';
   } catch { /* 保持默认 */ }
+}
+
+// 一个按钮同时保存「默认压缩阈值」与「服务端强制压缩」——此前按钮只发 chatGuard
+// 字段，阈值输入框的修改被静默丢弃（2026-09-11 审计 P0）。
+async function saveCompressionSettings() {
+  await saveCompactDefault();
+  await saveChatGuard();
 }
 
 async function saveChatGuard() {

@@ -26,7 +26,7 @@
   "port": 15730,
   "proxy": { "host": "127.0.0.1", "port": 10808 },   // 全局代理（viaProxy=true 通道共用）
   "timeouts": { "connectMs": 15000, "responseHeaderMs": 120000, "streamIdleMs": 600000, "requestMs": 600000 },
-  "maxConcurrentRequests": 8,
+  "maxConcurrentRequests": 16,
   "targets": [
     {
       "name": "deepseek-chat",

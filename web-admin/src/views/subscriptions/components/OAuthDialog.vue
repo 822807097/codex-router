@@ -172,7 +172,7 @@ const form = ref({
   alias: '',
   email: '',
   token: '',
-  proxy: { mode: 'custom', url: 'http://127.0.0.1:10808' },
+  proxy: { mode: 'direct', url: '' },
 });
 
 const isClaude = computed(() => props.provider === 'claude');
