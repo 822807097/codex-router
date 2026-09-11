@@ -1023,7 +1023,13 @@ async function applyDesktopRouter() {
   } catch (err) {
     clearInterval(stageTimer);
     const message = err?.response?.data?.error?.message || err?.message || '';
-    if (message.includes('谷歌')) {
+    if (err?.code === 'ECONNABORTED' || /timeout/i.test(message)) {
+      // 请求超时但服务端无断开监听、大概率仍在后台完成写入：明确告知而不是
+      // 让弹窗停在进度文案上（此前非谷歌类错误完全无提示，用户以为卡死）。
+      ElMessage.warning(
+        '接入请求等待超时（拉取上游模型清单较慢）。后台可能仍在写入配置：请稍等片刻后刷新面板查看接入状态；若已显示已接入，请手动完全退出并重开桌面端生效。',
+      );
+    } else if (message.includes('谷歌')) {
       ElMessage.warning(`接入较慢或失败：${message}（谷歌接口超时属已知情况，可直接重试）`);
     }
   } finally {

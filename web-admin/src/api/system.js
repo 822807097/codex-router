@@ -169,6 +169,10 @@ export function applyCodexDesktopRouter(data) {
     url: '/codex-desktop/apply-router',
     method: 'post',
     data,
+    // 接入要拉取全部绑定账号（ChatGPT/Claude/谷歌）的上游模型清单，谷歌接口
+    // 常规耗时 ~1 分钟。默认 15s 全局超时会让前端中途放弃、永远走不到自动
+    // 重启（服务端无断开监听仍会写完配置）——「应用完没重启」的根因。
+    timeout: 180_000,
   });
 }
 
