@@ -518,7 +518,7 @@
       },
       {
         "slug": "gpt-5.6-luna",
-        "autoCompactTokenLimit": 128000
+        "autoCompactTokenLimit": 64000
       },
       {
         "slug": "gpt-5.5",
