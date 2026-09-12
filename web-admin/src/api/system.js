@@ -110,6 +110,8 @@ export function restartCodexDesktopApp() {
   return request({
     url: '/codex-desktop/restart-app',
     method: 'post',
+    // Windows 下 taskkill 排空 + 等待进程消失实测可达 10s+，默认 15s 太贴边
+    timeout: 60_000,
   });
 }
 
@@ -117,6 +119,8 @@ export function syncCodexSessionProviders() {
   return request({
     url: '/codex-desktop/sync-session-providers',
     method: 'post',
+    // 会话迁移要扫全部 rollout（4000+ 线程实测 ~30s）
+    timeout: 180_000,
   });
 }
 
@@ -161,6 +165,10 @@ export function restoreCodexDesktopOfficial(data) {
     url: '/codex-desktop/restore-official',
     method: 'post',
     data,
+    // 恢复流程含桌面端会话迁移（实测 4000+ 线程 ~30s），默认 15s 超时会让
+    // 前端报错而服务端仍在写配置——「恢复官方直连按钮失效」的根因（与
+    // apply-router 同病根，2026-09-12）。
+    timeout: 180_000,
   });
 }
 
