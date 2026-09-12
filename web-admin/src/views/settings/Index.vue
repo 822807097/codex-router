@@ -282,6 +282,9 @@
         <el-button type="primary" :loading="desktopSaving" @click="openDesktopRouterDialog">
           <el-icon class="mr-1"><Connection /></el-icon>一键接入路由（选择模型）
         </el-button>
+        <div v-if="desktopRestoring || desktopRestarting || desktopSyncing" class="text-xs text-warning-text mt-2 text-left">
+          {{ desktopSlowActionStage }}
+        </div>
         <el-button type="danger" plain :loading="desktopRestoring" @click="restoreDesktopOfficial">
           恢复官方直连
         </el-button>
@@ -741,11 +744,16 @@ async function restartDesktopApp() {
     );
   } catch { return; }
   desktopRestarting.value = true;
+  startSlowActionStage([
+    { at: 0, text: '正在退出 ChatGPT 桌面端（等待进程完全退出）…' },
+    { at: 5, text: '正在重新拉起桌面端…约 10 秒后可用' },
+  ]);
   try {
     const res = await restartCodexDesktopApp();
     ElMessage.success(res.message || '桌面端重启中…');
   } catch { /* 拦截器提示 */ } finally {
     desktopRestarting.value = false;
+    stopSlowActionStage();
   }
 }
 
@@ -759,12 +767,18 @@ async function handleSyncSessionProviders() {
     );
   } catch { return; }
   desktopSyncing.value = true;
+  startSlowActionStage([
+    { at: 0, text: '正在扫描历史会话文件…' },
+    { at: 5, text: '正在迁移会话 provider 标记（4000+ 会话约需半分钟）…' },
+    { at: 25, text: '仍在迁移，请稍候——不要关闭页面' },
+  ]);
   try {
     const res = await syncCodexSessionProviders();
     ElMessage.success(res.message || '历史会话已同步');
     await loadConfig();
   } catch { /* 拦截器提示 */ } finally {
     desktopSyncing.value = false;
+    stopSlowActionStage();
   }
 }
 
@@ -895,6 +909,25 @@ const desktopApplyStage = ref('');
 const desktopRestoring = ref(false);
 const desktopRestarting = ref(false);
 const desktopSyncing = ref(false);
+// 慢接口阶段提示：恢复直连/会话同步实测 ~30s、重启 ~10s，没有进度文案用户
+// 会以为卡死（2026-09-12 用户反馈）。计时器按真实耗时阶段推进，完成/失败即清。
+const desktopSlowActionStage = ref('');
+let desktopSlowStageTimer = null;
+function startSlowActionStage(stages) {
+  const startedAt = Date.now();
+  desktopSlowActionStage.value = stages[0].text;
+  let idx = 0;
+  desktopSlowStageTimer = setInterval(() => {
+    const sec = Math.floor((Date.now() - startedAt) / 1000);
+    while (idx + 1 < stages.length && sec >= stages[idx + 1].at) idx += 1;
+    desktopSlowActionStage.value = `${stages[idx].text}（已 ${sec} 秒）`;
+  }, 1000);
+  return startedAt;
+}
+function stopSlowActionStage() {
+  if (desktopSlowStageTimer) { clearInterval(desktopSlowStageTimer); desktopSlowStageTimer = null; }
+  desktopSlowActionStage.value = '';
+}
 const desktopState = reactive({ mode: '', defaultModel: '', models: [], routerBaseUrl: 'http://127.0.0.1:15730/v1' });
 const desktopSelectedModels = ref([]);
 const desktopDefaultModel = ref('');
@@ -1054,6 +1087,12 @@ async function restoreDesktopOfficial() {
     );
   } catch { return; }
   desktopRestoring.value = true;
+  startSlowActionStage([
+    { at: 0, text: '正在恢复官方直连：备份现有配置…' },
+    { at: 3, text: '正在写入官方配置（config.toml / models.json）…' },
+    { at: 10, text: '正在迁移历史会话记录（会话多时需要半分钟）…' },
+    { at: 25, text: '仍在迁移会话，请稍候——不要关闭页面' },
+  ]);
   try {
     const res = await restoreCodexDesktopOfficial({ defaultModel: desktopDefaultModel.value || 'gpt-5.6-sol' });
     ElMessage.success(res.message || '已恢复官方直连');
@@ -1061,6 +1100,7 @@ async function restoreDesktopOfficial() {
     await autoRestartDesktopPrompt();
   } catch { /* 拦截器提示 */ } finally {
     desktopRestoring.value = false;
+    stopSlowActionStage();
   }
 }
 
