@@ -82,8 +82,16 @@
         </template>
       </el-alert>
 
+      <!-- 列表加载失败：就地提示 + 重试入口（loadEntries catch 置位） -->
+      <el-alert v-if="loadFailed" type="error" show-icon :closable="false" class="mb-3">
+        <template #title>密钥列表加载失败，请检查路由服务</template>
+        <template #default>
+          <el-button size="small" type="primary" plain :loading="loading" @click="loadEntries">重试</el-button>
+        </template>
+      </el-alert>
+
       <!-- key 列表 -->
-      <el-table :data="entries" size="small" class="custom-table" empty-text="该通道暂无池 key，可在下方添加">
+      <el-table v-loading="loading" :data="entries" size="small" class="custom-table" empty-text="该通道暂无池 key，可在下方添加">
         <el-table-column label="账号 / 备注" min-width="120">
           <template #default="{ row }">
             <span class="font-medium text-primary">{{ row.label || '未命名' }}</span>
@@ -247,9 +255,13 @@ const vendorLinks = computed(() => {
 const targetsLoading = ref(false);
 const entries = ref([]);
 const loading = ref(false);
+// 列表拉取失败标记：模板据此展示失败态与重试入口
+const loadFailed = ref(false);
 const testingId = ref(null);
 const saving = ref(false);
 const editingId = ref('');
+// 编辑时的原始形态：切换形态必须提供新 key（后端约束），用于前端预检
+const editingOriginalKind = ref('plaintext');
 const form = ref({ kind: 'plaintext', label: '', key: '', priority: 0, skipVerify: false });
 
 const earliestRetryAt = computed(() => (
@@ -303,10 +315,14 @@ async function loadTargets() {
 async function loadEntries() {
   if (!selectedTarget.value) return;
   loading.value = true;
+  loadFailed.value = false;
   try {
     const res = await listChannelKeys(selectedTarget.value, { skipGlobalError: true });
     entries.value = Array.isArray(res?.entries) ? res.entries : [];
-  } catch { /* 弹窗内静默 */ } finally {
+  } catch {
+    // skipGlobalError 已关全局提示，此处就地给失败态 + 重试入口
+    loadFailed.value = true;
+  } finally {
     loading.value = false;
   }
 }
@@ -320,8 +336,16 @@ function onKindChange() {
 async function handleSave() {
   const key = form.value.key?.trim();
   if (!key) {
-    ElMessage.warning(form.value.kind === 'env_ref' ? '请填写环境变量名' : '请填写 API Key');
-    return;
+    // 编辑模式下留空 = 不修改原 Key（后端 update 支持 key 缺省），仅切换形态时必须提供新 key
+    if (editingId.value) {
+      if (form.value.kind !== editingOriginalKind.value) {
+        ElMessage.warning('切换 key 形态（明文 / 环境变量）时必须填写新 key');
+        return;
+      }
+    } else {
+      ElMessage.warning(form.value.kind === 'env_ref' ? '请填写环境变量名' : '请填写 API Key');
+      return;
+    }
   }
   saving.value = true;
   try {
@@ -353,9 +377,11 @@ async function handleSave() {
 }
 
 async function handlePriorityChange(row, value) {
+  // input-number 清空时回调 null：视为未修改，不落库（避免把清空误存成 0）
+  if (value === null || value === undefined) return;
   if (value === row.priority) return;
   try {
-    await updateChannelKey({ id: row.id, priority: Number(value) || 0 });
+    await updateChannelKey({ id: row.id, priority: Math.max(0, Math.floor(Number(value) || 0)) });
     ElMessage.success('优先级已更新');
     await loadEntries();
   } catch { /* 拦截器提示 */ }
@@ -363,6 +389,7 @@ async function handlePriorityChange(row, value) {
 
 function openEdit(row) {
   editingId.value = row.id;
+  editingOriginalKind.value = row.kind;
   form.value = {
     kind: row.kind,
     label: row.label,

@@ -3,9 +3,10 @@
     :model-value="modelValue"
     @update:model-value="handleClose"
     :title="dialogTitle"
-    width="540px"
+    :width="isMobile ? '94%' : '540px'"
     class="custom-dialog-pro"
     :close-on-click-modal="false"
+    @closed="resetManualForm"
   >
     <!-- 顶部 2 模式切换 Tab -->
     <div class="flex justify-center mb-6">
@@ -122,7 +123,8 @@
         <el-form-item :label="credentialLabel">
           <el-input
             v-model="form.token"
-            type="textarea"
+            type="password"
+            show-password
             :rows="3"
             :placeholder="credentialPlaceholder"
           />
@@ -132,7 +134,7 @@
           <div class="text-xs text-secondary mt-1">国内网络访问 Google / ChatGPT 通常需要代理；直连能连通就不填</div>
         </el-form-item>
       </el-form>
-      <el-button type="primary" class="w-full" @click="submitManualAccount">
+      <el-button type="primary" class="w-full" :loading="importing" @click="submitManualAccount">
         确认绑定
       </el-button>
     </div>
@@ -162,11 +164,16 @@ const emit = defineEmits(['update:modelValue', 'success']);
 const activeMode = ref('oauth');
 const authorizing = ref(false);
 const exchanging = ref(false);
+// 手动 Token 导入防重复提交
+const importing = ref(false);
 const authUrlDisplay = ref('');
 const sessionState = ref('');
 const loopbackPort = ref(null);
 const manualCodeOrUrl = ref('');
 let pollTimer = null;
+let pollTimeoutTimer = null;
+// 授权等待上限 5 分钟：超时停止轮询，防回调丢失后无限空转
+const OAUTH_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
 const form = ref({
   alias: '',
@@ -174,6 +181,16 @@ const form = ref({
   token: '',
   proxy: { mode: 'direct', url: '' },
 });
+
+// 手动 Token 表单重置为初始值（提交成功 / 弹窗关闭时）
+function resetManualForm() {
+  form.value = {
+    alias: '',
+    email: '',
+    token: '',
+    proxy: { mode: 'direct', url: '' },
+  };
+}
 
 const isClaude = computed(() => props.provider === 'claude');
 const isProvider = (name) => props.provider === name;
@@ -197,10 +214,7 @@ const credentialLabel = computed(() => {
 const credentialPlaceholder = computed(() => '粘贴 OAuth Refresh Token（授权模式下会自动获取，此处用于手动导入）...');
 
 function resetFlowState() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
+  stopPolling();
   authorizing.value = false;
   authUrlDisplay.value = '';
   sessionState.value = '';
@@ -236,16 +250,31 @@ async function handleStartOAuth() {
   }
 }
 
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  if (pollTimeoutTimer) {
+    clearTimeout(pollTimeoutTimer);
+    pollTimeoutTimer = null;
+  }
+}
+
 function startPolling() {
-  if (pollTimer) clearInterval(pollTimer);
+  stopPolling();
+  pollTimeoutTimer = setTimeout(() => {
+    stopPolling();
+    authorizing.value = false;
+    ElMessage.warning('授权等待超时，请重试或检查网络');
+  }, OAUTH_POLL_TIMEOUT_MS);
   pollTimer = setInterval(async () => {
     try {
       const res = await pollOAuthStatus(props.provider);
       if (res.complete && res.account) {
         finishSuccess(res.account);
       } else if (res.error) {
-        if (pollTimer) clearInterval(pollTimer);
-        pollTimer = null;
+        stopPolling();
         authorizing.value = false;
         ElMessage.error(res.error.message || '授权失败，请重试');
       }
@@ -256,10 +285,7 @@ function startPolling() {
 }
 
 function finishSuccess(account) {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
+  stopPolling();
   authorizing.value = false;
   const label = account?.email ? `${account.email}` : '账号';
   const plan = account?.planType ? ` · ${account.planType}` : '';
@@ -290,10 +316,12 @@ async function submitManualCode() {
 }
 
 async function submitManualAccount() {
+  if (importing.value) return;
   if (!form.value.token) {
     ElMessage.warning('请输入凭据');
     return;
   }
+  importing.value = true;
   try {
     await addAccount({
       provider: props.provider,
@@ -309,9 +337,12 @@ async function submitManualAccount() {
       },
     });
     ElMessage.success('账号已绑定！');
+    resetManualForm();
     emit('update:modelValue', false);
     emit('success');
-  } catch { /* 错误提示由请求拦截器统一处理 */ }
+  } catch { /* 错误提示由请求拦截器统一处理 */ } finally {
+    importing.value = false;
+  }
 }
 
 function copyAuthUrl() {
@@ -348,7 +379,7 @@ function openAuthUrlInNewTab() {
 }
 
 onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer);
+  stopPolling();
 });
 </script>
 

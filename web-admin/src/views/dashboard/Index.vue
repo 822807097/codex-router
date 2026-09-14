@@ -159,7 +159,7 @@ import { getModels } from '../../api/models.js';
 import AsyncContainer from '../../components/AsyncContainer.vue';
 import { useECharts, cssVar, chartColorByIndex } from '../../composables/useECharts.js';
 
-// ---- 新手引导 · 三步接入（cc-switch 式 onboarding）----
+// ---- 新手引导 · 三步接入（参考开源方案 onboarding）----
 const onboarding = ref({ models: 0, hasKey: false, keyMasked: '', accounts: 0 });
 const onboardingDismissed = ref(false);
 const onboardingVisible = computed(() => !onboardingDismissed.value && (
@@ -290,7 +290,6 @@ function renderStackedChart() {
   const option = {
     backgroundColor: 'transparent',
     color: models.map((_, idx) => chartColorByIndex(idx)),
-    grid: { left: '3%', right: '4%', bottom: '15%', top: '14%', containLabel: true },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'line', lineStyle: { color: cssVar('--border-muted'), width: 1 } },

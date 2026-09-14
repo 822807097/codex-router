@@ -89,6 +89,44 @@ export function listCursorGatewayModels(config = {}) {
 
 // ---------- 模型上下文默认值（全局压缩阈值） ----------
 
+// ---------- 桌面端 MCP 插件管理（Codex 原生 [mcp_servers.*]） ----------
+
+export function listDesktopMcpServers(config = {}) {
+  return request({
+    url: '/desktop/mcp-servers',
+    method: 'get',
+    ...config,
+  });
+}
+
+export function upsertDesktopMcpServer(data) {
+  return request({
+    url: '/desktop/mcp-servers/upsert',
+    method: 'post',
+    data,
+    timeout: 30_000,
+  });
+}
+
+export function deleteDesktopMcpServer(name) {
+  return request({
+    url: '/desktop/mcp-servers/delete',
+    method: 'post',
+    data: { name },
+    timeout: 30_000,
+  });
+}
+
+export function testDesktopMcpServer(data) {
+  return request({
+    url: '/desktop/mcp-servers/test',
+    method: 'post',
+    // npx 冷启动可达数十秒：显式传满后端上限 60s（axios 65s 仅兜底 HTTP 层）
+    data: { timeoutMs: 60000, ...data },
+    timeout: 65_000,
+  });
+}
+
 export function getModelContextDefaults(config = {}) {
   return request({
     url: '/model-context/defaults',

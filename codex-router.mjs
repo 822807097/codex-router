@@ -188,6 +188,8 @@ const memoryGoalCheckpoints = new GoalCheckpointStore(cfg.goalCheckpoint);
 const requestBudget = new RequestBudget(REQUEST_BUDGET);
 const modelQuotaCooldown = createModelQuotaCooldownStore();
 const ROUTER_STARTED_AT = Date.now();
+// 版本自描述（/_admin/api/status 与回环探测用；package.json 是唯一事实源）
+const ROUTER_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version || '';
 
 // ---------- 视觉中继配置 ----------
 // 文本模型 (vision:false) 收到 input_image 时，调用这里配置的视觉模型生成描述
@@ -580,7 +582,7 @@ const adminHandler = createAdminHandler({
   webRoot: path.join(__dirname, 'web'),
   defaultCodexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
   env: process.env,
-  runtime: preparedConfig.runtime,
+  runtime: { ...preparedConfig.runtime, version: ROUTER_VERSION },
   targets: TARGETS,
   warnings: preparedConfig.warnings,
   startedAt: ROUTER_STARTED_AT,
@@ -613,6 +615,15 @@ try {
     chatGuard: {
       enabled: cfg.chatGuard?.enabled !== false,
       maxContextTokens: Number(cfg.chatGuard?.maxContextTokens) || 400_000,
+    },
+    // 官方通道增量续聊（默认关闭）：官方 codex 后端 2026-09-12 起已移除
+    // previous_response_id 支持（实测 400 "Unsupported parameter: previous_response_id"），
+    // 开着只会每轮多付一次被拒往返再全量回退。上游恢复支持后可在
+    // config.json 显式 officialIncremental.enabled=true 重新启用。
+    officialIncremental: {
+      enabled: cfg.officialIncremental?.enabled === true,
+      maxEntries: Number(cfg.officialIncremental?.maxEntries) || undefined,
+      maxBytes: Number(cfg.officialIncremental?.maxBytes) || undefined,
     },
     providerPool,
     responseHistory,
@@ -892,6 +903,9 @@ async function handleImageRequest(req, res, action) {
 
 server.listen(PORT, '127.0.0.1', () => {
   log(`codex-router listening on 127.0.0.1:${PORT}`);
+  // 启动成功即解除 watchdog 维护标记（stop/restart 窗口结束的权威信号；
+  // 覆盖所有启动路径，配合 watchdog 侧 15 分钟超龄兜底形成生命周期闭环）
+  try { fs.rmSync(path.join(__dirname, 'scripts', '.watchdog-maintenance'), { force: true }); } catch { /* 尽力 */ }
   log(`  config: ${CONFIG_PATH}`);
   log(`  proxy: ${V2RAY_PROXY.host}:${V2RAY_PROXY.port}`);
   log(`  targets: ${TARGETS.map((t) => t.name).join(', ')}`);

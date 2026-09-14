@@ -126,7 +126,7 @@
       <!-- key 列表：多把、双形态、可增删 -->
       <div class="text-sm font-semibold text-primary mb-2">订阅 Key（可多把，额度耗尽自动轮换）</div>
       <div v-for="(item, index) in keyRows" :key="index" class="key-row">
-        <el-radio-group v-model="item.kind" size="small">
+        <el-radio-group v-model="item.kind" size="small" class="shrink-0">
           <el-radio-button value="plaintext">Key</el-radio-button>
           <el-radio-button value="env_ref">环境变量</el-radio-button>
         </el-radio-group>
@@ -135,9 +135,9 @@
           :type="item.kind === 'plaintext' ? 'password' : 'text'"
           :show-password="item.kind === 'plaintext'"
           :placeholder="item.kind === 'plaintext' ? 'sk-...（订阅套餐 API Key）' : '环境变量名（如 DEEPSEEK_KEY_2）'"
-          class="flex-1 font-mono"
+          class="flex-1 min-w-[13rem] font-mono"
         />
-        <el-input v-model="item.label" placeholder="备注" class="w-28" maxlength="40" />
+        <el-input v-model="item.label" placeholder="备注" class="w-28 max-w-full" maxlength="40" />
         <el-input-number v-model="item.priority" :min="0" :max="99" size="small" controls-position="right" class="w-24" />
         <el-button size="small" type="danger" plain :disabled="keyRows.length <= 1" @click="keyRows.splice(index, 1)">
           删除
@@ -367,6 +367,7 @@ function resetState() {
 .key-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin-bottom: 0.5rem;
 }

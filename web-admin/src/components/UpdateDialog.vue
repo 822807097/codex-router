@@ -7,7 +7,7 @@
   <el-dialog
     :model-value="modelValue"
     title="软件更新"
-    width="520px"
+    :width="isMobile ? '94%' : '520px'"
     class="custom-dialog-pro"
     append-to-body
     :close-on-click-modal="!applying"
@@ -58,7 +58,7 @@
       </div>
     </template>
     <template #footer>
-      <el-button v-if="!applying" @click="emit('skip')">暂不更新</el-button>
+      <el-button v-if="!applying" @click="emit('skip')">{{ done ? '关闭' : '暂不更新' }}</el-button>
       <el-button
         v-if="info?.hasUpdate && !done && !applying"
         type="primary"
@@ -71,6 +71,9 @@
 <script setup>
 import { ref, computed, watch, onUnmounted } from 'vue';
 import request from '../api/request.js';
+import { useBreakpoint } from '../composables/useBreakpoint.js';
+
+const { isMobile } = useBreakpoint();
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },

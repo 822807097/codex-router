@@ -377,11 +377,11 @@ function getAccounts(provider) {
 
 function statusMeta(acc) {
   // auth_expired：凭据被上游吊销（401），不会自动恢复，需重新授权（后端 markAuthExpired 标记）
-  if (acc.status === 'auth_expired' || acc.status === 'expired') return { type: 'danger', label: '登录过期' };
-  if (acc.status === 'cooldown') return { type: 'warning', label: 'Cooldown 429' };
+  if (acc.status === 'auth_expired' || acc.status === 'expired') return { type: 'danger', label: '登录过期（需重新授权）' };
+  if (acc.status === 'cooldown') return { type: 'warning', label: '额度受限（稍后自动恢复）' };
   // suspect：连续网络/服务错误后的自动退避（60 秒起步翻倍，最长 30 分钟），到期自动恢复
   if (acc.status === 'suspect') return { type: 'warning', label: '观察中（退避恢复）' };
-  return { type: 'success', label: 'Active' };
+  return { type: 'success', label: '正常使用中' };
 }
 
 const expiredAccounts = computed(() =>
@@ -434,7 +434,7 @@ function formatQuotaReset(ts) {
   return new Date(Number(ts)).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-// 用账号凭据真实测试指定模型（sub2api 式：选模型 → 真实请求上游生成最小响应）
+// 用账号凭据真实测试指定模型（参考开源方案：选模型 → 真实请求上游生成最小响应）
 // 结果显示按「账号+模型」独立存 map，避免多账号并发测试互相覆盖。
 const modelTestResults = reactive({});
 // 每个「账号+模型」独立的进行中标记：支持并发测试各自转圈，不互相打断
@@ -497,8 +497,8 @@ const proxyEdit = reactive({});
 const proxySavingId = ref('');
 
 function initProxyEdit(acc) {
-  // 回显已有代理到编辑器（分字段或链接粘贴由组件解析）
-  proxyEdit[acc.id] = { mode: 'custom', url: acc.proxy?.url || '' };
+  // 回显已有代理到编辑器（分字段或链接粘贴由组件解析）；未启用时回直连态
+  proxyEdit[acc.id] = { mode: acc.proxy?.enabled ? 'custom' : 'direct', url: acc.proxy?.url || '' };
 }
 
 async function handleSetProxy(acc) {
@@ -568,7 +568,12 @@ async function handleFetchModels(acc) {
     const res = await fetchAccountModels(acc.provider, acc.id);
     fetchedModels[acc.id] = res.models || [];
     fetchedModelSource[acc.id] = res.source || 'upstream';
-    ElMessage.success(`已拉取 ${fetchedModels[acc.id].length} 个可用模型（${res.source === 'builtin' ? '内置清单' : '上游实时'}）`);
+    // 入库告警（目录池损坏/revision 冲突等）：清单已回显但没进目录池，必须让用户知道
+    if (res.syncWarning) {
+      ElMessage.warning(`已拉取 ${fetchedModels[acc.id].length} 个模型，但入库未完成：${res.syncWarning}`);
+    } else {
+      ElMessage.success(`已拉取 ${fetchedModels[acc.id].length} 个可用模型（${res.source === 'builtin' ? '内置清单' : '上游实时'}）${res.addedSlugs?.length ? `，新增入库 ${res.addedSlugs.length} 个` : ''}`);
+    }
   } catch { /* 错误提示由请求拦截器统一处理 */ } finally {
     fetchingModelsId.value = null;
   }
@@ -619,14 +624,9 @@ async function loadAllAccounts() {
 onMounted(() => {
   loadAllAccounts();
   loadCodexIdentity();
-  // ChatGPT 账号自动拉取一次真实额度（谷歌等点击刷新即可）
+  // ChatGPT 账号自动拉取一次真实额度（谷歌等点击刷新即可）；
+  // chatgpt-web 模板只消费本地周计数、不消费 quotaData，不再对其发起无效拉取
   setTimeout(() => loadAllQuotasFor('openai'), 800);
-  // 网页会话账号同样自动拉额度 + 已知模型清单（有账号才拉，避免空转）
-  setTimeout(() => {
-    if (accounts.value.some((a) => a.provider === 'chatgpt-web')) {
-      loadAllQuotasFor('chatgpt-web');
-    }
-  }, 1200);
 });
 </script>
 
@@ -688,7 +688,7 @@ onMounted(() => {
   font-size: 0.8rem;
   color: var(--text-secondary);
 }
-/* 可用模型清单行：显示名 + 可复制模型 ID + 测试（Antigravity Tools 式） */
+/* 可用模型清单行：显示名 + 可复制模型 ID + 测试（参考开源方案） */
 .account-model-row {
   display: flex;
   align-items: center;

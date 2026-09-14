@@ -9,6 +9,24 @@ $saveRoot = Split-Path (Resolve-Path (Join-Path $here '..'))
 $logPath = Join-Path $saveRoot 'router-watchdog.log'
 $restartScript = Join-Path $here 'restart-router.ps1'
 $stateFile = Join-Path $here '.watchdog-state'
+# 维护标记：restart/stop 脚本在停止~就绪窗口写入——排空期 healthz 必失败是预期，
+# watchdog 此刻拉起会与人为操作打架（结构冲突，2026-09-13 审查定论）。
+# 生命周期闭环：start 启动成功清除标记；此处对超龄标记（>15 分钟）按残留清除
+# （覆盖 restart 异常退出/Ctrl+C 残留导致 watchdog 永久静默的反向风险）。
+$maintenanceMarker = Join-Path $here '.watchdog-maintenance'
+if (Test-Path $maintenanceMarker) {
+    $markerAgeMin = -1
+    try {
+        $stamp = (Get-Content $maintenanceMarker -Raw -ErrorAction Stop) -replace '^[^\d]*','' -replace '\s.*$',''
+        if ($stamp) { $markerAgeMin = ((Get-Date) - [datetime]$stamp).TotalMinutes }
+    } catch { }
+    if ($markerAgeMin -ge 0 -and $markerAgeMin -lt 15) {
+        # 维护中：不计数不重启（保留既有 state，退出后下次巡检自然恢复判定）
+        exit 0
+    }
+    Remove-Item $maintenanceMarker -Force -ErrorAction SilentlyContinue
+    Log "维护标记超龄（${markerAgeMin} 分钟）按残留清除，恢复守护判定"
+}
 
 function Log($msg) {
     $line = "{0} {1}" -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $msg

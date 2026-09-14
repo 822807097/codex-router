@@ -66,7 +66,6 @@
           <div class="flex items-center gap-2">
             <span class="text-lg">👁️</span>
             <span class="font-bold text-primary text-sm">纯文本模型「借眼看图」视觉中继 (Vision Relay)</span>
-            <el-tag type="success" size="small" effect="plain">运行中</el-tag>
           </div>
         </div>
       </template>
@@ -131,7 +130,7 @@
         </div>
       </div>
       <div v-if="configLoaded" class="mt-3 text-xs text-secondary">
-        全局代理地址: <span class="font-mono text-regular">{{ proxyAddress }}</span>（viaProxy 通道经 HTTP CONNECT 隧道）
+        全局代理地址: <span class="font-mono text-regular">{{ proxyAddress || '未配置' }}</span>（viaProxy 通道经 HTTP CONNECT 隧道）
       </div>
     </el-card>
 
@@ -250,7 +249,6 @@
         <div class="flex items-center gap-2">
           <span class="text-lg">🔌</span>
           <span class="font-bold text-primary text-sm">Codex 插件与 MCP (Model Context Protocol) 适配</span>
-          <el-tag type="success" size="small" effect="plain">自动转换就绪</el-tag>
         </div>
       </template>
       <div class="text-xs text-secondary leading-relaxed">
@@ -299,6 +297,138 @@
         </span>
       </div>
     </el-card>
+
+    <!-- 桌面端 MCP 插件管理（Codex 原生 [mcp_servers.*]） -->
+    <el-card shadow="never" class="setting-card">
+      <template #header>
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🧩</span>
+            <span class="font-bold text-primary text-sm">桌面端 MCP 插件（Codex 原生插件）</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <el-button size="small" :loading="mcpLoading" @click="loadMcpServers">刷新</el-button>
+            <el-button size="small" type="primary" @click="openMcpCreate">添加插件</el-button>
+          </div>
+        </div>
+      </template>
+      <div class="text-xs text-secondary leading-relaxed mb-3">
+        这里管理的是 <b>Codex 桌面端官方插件机制</b>（config.toml 的 [mcp_servers] 段）——插件由桌面端自己启动和执行，
+        对官方模型和路由模型都生效。例如「windows-computer-use」插件就能让任何模型直接操作电脑。
+        兼容 codex++ 生态插件的 MCP 部分；改动后需<b>重启桌面端</b>生效（可用上方按钮）。
+      </div>
+      <el-table :data="mcpServers" size="small" class="custom-table" empty-text="尚未配置任何 MCP 插件，点「添加插件」接入">
+        <el-table-column label="插件名" min-width="140">
+          <template #default="{ row }">
+            <span class="font-mono font-medium text-primary">{{ row.name }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="启动命令" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="font-mono text-xs">{{ row.command }} {{ (row.args || []).join(' ') }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="超时" width="80">
+          <template #default="{ row }">
+            <span class="text-xs text-secondary">{{ row.startupTimeoutSec ? `${row.startupTimeoutSec}s` : '默认' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.enabled !== false"
+              :disabled="!row.editable || mcpToggling === row.name"
+              :loading="mcpToggling === row.name"
+              inline-prompt
+              active-text="启用"
+              inactive-text="停用"
+              @change="(v) => toggleMcpEnabled(row, v)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="说明" width="150">
+          <template #default="{ row }">
+            <el-tag v-if="!row.editable" type="warning" size="small" effect="plain" title="含面板不认识的高级配置，请在 config.toml 手工编辑">高级配置</el-tag>
+            <el-tag v-else type="info" size="small" effect="plain">可编辑</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="200" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" plain :loading="mcpTesting === row.name" @click="testMcpRow(row)">
+              测试
+            </el-button>
+            <el-button size="small" plain :disabled="!row.editable" @click="openMcpEdit(row)">编辑</el-button>
+            <el-button size="small" type="danger" plain :disabled="!row.editable" @click="removeMcpRow(row)">移除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div v-if="mcpTestResult" class="mt-3">
+        <el-alert
+          :type="mcpTestResult.ok ? 'success' : 'error'"
+          :closable="true"
+          @close="mcpTestResult = null"
+        >
+          <template #title>
+            {{ mcpTestResult.ok
+              ? `连接成功：${mcpTestResult.toolCount} 个工具，耗时 ${mcpTestResult.latencyMs}ms`
+              : `连接失败：${mcpTestResult.error || '未知错误'}` }}
+          </template>
+          <div v-if="mcpTestResult.ok && mcpTestResult.tools?.length" class="font-mono text-xs">
+            {{ mcpTestResult.tools.join(' · ') }}
+          </div>
+        </el-alert>
+      </div>
+    </el-card>
+
+    <!-- MCP 插件编辑弹窗 -->
+    <el-dialog
+      v-model="mcpDialogOpen"
+      :title="mcpEditing ? `编辑插件：${mcpForm.name}` : '添加 MCP 插件'"
+      :width="isMobile ? '94%' : '640px'"
+      class="custom-dialog-pro"
+      append-to-body
+    >
+      <el-form label-position="top">
+        <el-form-item label="插件名（英文标识，如 my-tool）">
+          <el-input v-model="mcpForm.name" :disabled="mcpEditing" placeholder="例如 filesystem / windows-computer-use" class="font-mono" />
+        </el-form-item>
+        <el-form-item label="启动命令（可执行文件路径，如 node / npx / xxx.exe）">
+          <el-input v-model="mcpForm.command" placeholder="例如 B:\software\nodejs\node.exe 或 npx" class="font-mono" />
+        </el-form-item>
+        <el-form-item label="启动参数（每行一个）">
+          <el-input v-model="mcpForm.argsText" type="textarea" :rows="3" placeholder="例如（每行一个）：&#10;-y&#10;@upstash/context7-mcp" class="font-mono" />
+        </el-form-item>
+        <el-form-item label="启动超时（秒，可选；冷启动慢的插件如 npx 建议给 120）">
+          <el-input-number v-model="mcpForm.startupTimeoutSec" :min="1" :max="600" class="w-full" />
+        </el-form-item>
+        <el-form-item label="单次工具调用超时（秒，可选；电脑操作类建议 60）">
+          <el-input-number v-model="mcpForm.toolTimeoutSec" :min="1" :max="600" class="w-full" />
+        </el-form-item>
+        <el-form-item label="工具白名单（每行一个工具名，留空 = 注册全部工具）">
+          <el-input v-model="mcpForm.enabledToolsText" type="textarea" :rows="2" placeholder="留空注册全部；填了则只注册列出的工具" class="font-mono" />
+        </el-form-item>
+        <el-form-item label="启用插件（关闭 = 桌面端跳过加载，配置保留）">
+          <el-switch v-model="mcpForm.enabled" />
+        </el-form-item>
+        <el-form-item label="环境变量（每行一个 KEY=VALUE，可留空）">
+          <el-input v-model="mcpForm.envText" type="textarea" :rows="3" placeholder="例如：&#10;API_KEY=sk-xxx&#10;DEBUG=1" class="font-mono" />
+        </el-form-item>
+      </el-form>
+      <div v-if="mcpTestResult" class="mb-3">
+        <el-alert :type="mcpTestResult.ok ? 'success' : 'error'" :closable="false">
+          <template #title>
+            {{ mcpTestResult.ok
+              ? `连接成功：${mcpTestResult.toolCount} 个工具，耗时 ${mcpTestResult.latencyMs}ms`
+              : `连接失败：${mcpTestResult.error || '未知错误'}` }}
+          </template>
+        </el-alert>
+      </div>
+      <template #footer>
+        <el-button plain :loading="mcpTesting === '__form__'" @click="testMcpForm">先测试连接</el-button>
+        <el-button @click="mcpDialogOpen = false">取消</el-button>
+        <el-button type="primary" :loading="mcpSaving" @click="saveMcpServer">保存（重启桌面端后生效）</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 接入路由：模型选择弹窗（可单选/多选/全选） -->
     <el-dialog v-model="desktopDialogOpen" title="接入路由：选择要加载到 Codex 的模型" :width="isMobile ? '96%' : '960px'" class="custom-dialog-pro" append-to-body>
@@ -357,7 +487,7 @@
       </template>
     </el-dialog>
 
-  <el-dialog v-model="showUpdateDialog" title="软件更新" width="520px" class="custom-dialog-pro" append-to-body>
+  <el-dialog v-model="showUpdateDialog" title="软件更新" :width="isMobile ? '94%' : '520px'" class="custom-dialog-pro" append-to-body>
     <template v-if="updateDone">
       <el-result icon="success" title="更新完成" sub-title="服务正在优雅重启，约 3 秒后刷新页面即可使用新版本">
         <template #extra>
@@ -401,15 +531,19 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import request from '../../api/request.js';
 import {
-  getSystemConfig, saveSystemConfig, testVisionRelay, getCursorGatewayStatus, listCursorGatewayAccounts, addCursorGatewayAccount, removeCursorGatewayAccount, restartCursorGateway, startCursorGateway, stopCursorGateway, listCursorGatewayModels, restartCodexDesktopApp, syncCodexSessionProviders, getCodexDesktopState, restoreCodexDesktopOfficial, applyCodexDesktopRouter, checkForUpdate, applyUpdate, getModelContextDefaults, saveModelContextDefaults,
+  getSystemConfig, saveSystemConfig, testVisionRelay, getCursorGatewayStatus, listCursorGatewayAccounts, addCursorGatewayAccount, removeCursorGatewayAccount, restartCursorGateway, startCursorGateway, stopCursorGateway, listCursorGatewayModels, restartCodexDesktopApp, syncCodexSessionProviders, getCodexDesktopState, restoreCodexDesktopOfficial, applyCodexDesktopRouter, checkForUpdate, applyUpdate, getModelContextDefaults, saveModelContextDefaults, getRouterStatus,
+  listDesktopMcpServers, upsertDesktopMcpServer, deleteDesktopMcpServer, testDesktopMcpServer,
 } from '../../api/system.js';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AsyncContainer from '../../components/AsyncContainer.vue';
 import ProxyConfigEditor from '../../components/ProxyConfigEditor.vue';
+import { useBreakpoint } from '../../composables/useBreakpoint.js';
+
+const { isMobile } = useBreakpoint();
 
 const loading = ref(true);
 const loadError = ref('');
-const currentVersion = ref('1.4.1');
+const currentVersion = ref('');
 const updateChecking = ref(false);
 const updateInfo = ref(null);
 const showUpdateDialog = ref(false);
@@ -418,16 +552,26 @@ const updateDone = ref(false);
 
 // 全局默认压缩阈值
 const compactLimitInput = ref('');
+// 加载时的原始值快照与加载失败标记：保存只在值有变化时下发阈值——
+// 空输入被解释为 null（清除阈值），盲目下发会把没动过的配置误清掉
+const compactOriginal = ref(null);
+const compactLoadFailed = ref(false);
 const chatGuardEnabled = ref(true);
 const chatGuardInput = ref('');
 const chatGuardSaving = ref(false);
 const compactSaving = ref(false);
 
 async function loadCompactDefault() {
+  compactLoadFailed.value = false;
   try {
     const res = await getModelContextDefaults({ skipGlobalError: true });
     compactLimitInput.value = res?.autoCompactTokenLimit ? String(res.autoCompactTokenLimit) : '';
-  } catch { /* 读取失败保持留空 */ }
+    compactOriginal.value = compactLimitInput.value;
+  } catch {
+    // 读取失败保持留空；记录失败态，保存时跳过阈值子调用（仅保存开关）
+    compactOriginal.value = null;
+    compactLoadFailed.value = true;
+  }
   // 服务端强制压缩（chatGuard）
   try {
     const res = await request({ url: '/chat-guard', method: 'get', skipGlobalError: true });
@@ -437,9 +581,14 @@ async function loadCompactDefault() {
 }
 
 // 一个按钮同时保存「默认压缩阈值」与「服务端强制压缩」——此前按钮只发 chatGuard
-// 字段，阈值输入框的修改被静默丢弃（2026-09-11 审计 P0）。
+// 字段，阈值输入框的修改被静默丢弃（2026-09-11 审计 P0）。阈值仅在与加载原始值
+// 不同时才下发；加载失败时只保存开关，不动阈值。
 async function saveCompressionSettings() {
-  await saveCompactDefault();
+  if (compactLoadFailed.value) {
+    ElMessage.warning('默认压缩阈值加载失败，本次仅保存开关，未改动阈值');
+  } else if (String(compactLimitInput.value ?? '').trim() !== String(compactOriginal.value ?? '')) {
+    await saveCompactDefault();
+  }
   await saveChatGuard();
 }
 
@@ -488,6 +637,8 @@ async function saveCompactDefault() {
   compactSaving.value = true;
   try {
     await saveModelContextDefaults({ autoCompactTokenLimit: value });
+    // 同步快照为后端当前值，避免重复点击时对未变化的值重复下发
+    compactOriginal.value = String(compactLimitInput.value ?? '').trim();
     ElMessage.success('默认压缩阈值已保存；重启路由后写回模型目录生效');
   } catch { /* 错误提示由请求拦截器统一处理 */ } finally {
     compactSaving.value = false;
@@ -607,7 +758,6 @@ async function handleVisionSave() {
 
 const visionEndpoints = ref([]);
 const visionRelayExtras = ref({ concurrency: 3, cacheMaxEntries: 64, maxImagesPerRequest: 8 });
-const visionTesting = ref(false);
 const visionTestingIdx = ref(null);
 const visionTestingAll = ref(false);
 const visionSaving = ref(false);
@@ -626,7 +776,8 @@ function emptyVisionEndpoint() {
 function addVisionEndpoint() {
   visionEndpoints.value.push(emptyVisionEndpoint());
 }
-const proxyAddress = ref('127.0.0.1:10808');
+// 全局代理地址：仅在配置存在时展示；默认空串避免把占位值当真实地址展示
+const proxyAddress = ref('');
 const configLoaded = ref(false);
 
 // ---- Cursor 订阅网关（内置面板管理）----
@@ -644,7 +795,7 @@ const cursorNewKey = ref('');
 const cursorNewLabel = ref('');
 const cursorAdding = ref(false);
 
-// 网关上游（NGLSG/cursor2api）版本检查与一键更新
+// 网关上游（开源方案）版本检查与一键更新
 async function checkGatewayUpstream() {
   cursorGwUpstreamChecking.value = true;
   try {
@@ -900,7 +1051,178 @@ onMounted(() => {
   loadCursorModels();
   loadDesktopState();
   loadCompactDefault();
+  loadMcpServers();
+  // 真实版本号（此前写死 1.4.1 常年过期，与侧栏版本互相矛盾）
+  loadCurrentVersion();
 });
+
+// ---- 桌面端 MCP 插件管理（Codex 原生 [mcp_servers.*]，2026-09-13） ----
+const mcpServers = ref([]);
+const mcpLoading = ref(false);
+const mcpTesting = ref('');
+const mcpSaving = ref(false);
+const mcpDialogOpen = ref(false);
+const mcpEditing = ref(false);
+const mcpTestResult = ref(null);
+const emptyMcpForm = () => ({ name: '', command: '', argsText: '', envText: '', startupTimeoutSec: 120, toolTimeoutSec: null, enabledToolsText: '', enabled: true });
+const mcpForm = ref(emptyMcpForm());
+const mcpToggling = ref('');
+
+async function loadMcpServers() {
+  mcpLoading.value = true;
+  try {
+    const res = await listDesktopMcpServers({ skipGlobalError: true });
+    mcpServers.value = Array.isArray(res?.servers) ? res.servers : [];
+  } catch {
+    mcpServers.value = [];
+  } finally {
+    mcpLoading.value = false;
+  }
+}
+
+function parseMcpForm() {
+  const args = mcpForm.value.argsText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const env = {};
+  for (const line of mcpForm.value.envText.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq > 0) env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1);
+  }
+  const enabledTools = mcpForm.value.enabledToolsText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return {
+    name: mcpForm.value.name.trim(),
+    command: mcpForm.value.command.trim(),
+    args,
+    env,
+    startupTimeoutSec: Number(mcpForm.value.startupTimeoutSec) > 0 ? Number(mcpForm.value.startupTimeoutSec) : null,
+    toolTimeoutSec: Number(mcpForm.value.toolTimeoutSec) > 0 ? Number(mcpForm.value.toolTimeoutSec) : null,
+    enabledTools: enabledTools.length ? enabledTools : null,
+    enabled: mcpForm.value.enabled !== false,
+  };
+}
+
+function openMcpCreate() {
+  mcpEditing.value = false;
+  mcpForm.value = emptyMcpForm();
+  mcpTestResult.value = null;
+  mcpDialogOpen.value = true;
+}
+
+function openMcpEdit(row) {
+  mcpEditing.value = true;
+  mcpForm.value = {
+    name: row.name,
+    command: row.command,
+    argsText: (row.args || []).join('\n'),
+    envText: Object.entries(row.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
+    // 原段未配置时回显空（el-input-number 显示为空）：保存不落键，
+    // 不把桌面端隐式默认固化成显式 120（2026-09-13 审查 P3）
+    startupTimeoutSec: row.startupTimeoutSec || null,
+    toolTimeoutSec: row.toolTimeoutSec || null,
+    enabledToolsText: (row.enabledTools || []).join('\n'),
+    enabled: row.enabled !== false,
+  };
+  mcpTestResult.value = null;
+  mcpDialogOpen.value = true;
+}
+
+// 表格行内启停开关：整段重写（enabled 是官方键，桌面端原生识别）
+async function toggleMcpEnabled(row, enabled) {
+  mcpToggling.value = row.name;
+  try {
+    const res = await upsertDesktopMcpServer({
+      name: row.name,
+      command: row.command,
+      args: row.args || [],
+      env: row.env || {},
+      startupTimeoutSec: row.startupTimeoutSec || null,
+      toolTimeoutSec: row.toolTimeoutSec || null,
+      enabledTools: row.enabledTools || null,
+      disabledTools: row.disabledTools || null,
+      enabled,
+    });
+    ElMessage.success(res.message || (enabled ? '已启用' : '已停用'));
+    await loadMcpServers();
+  } catch { /* 拦截器提示 */ } finally {
+    mcpToggling.value = '';
+  }
+}
+
+async function testMcpForm() {
+  const payload = parseMcpForm();
+  if (!payload.command) {
+    ElMessage.warning('请先填写启动命令');
+    return;
+  }
+  mcpTesting.value = '__form__';
+  try {
+    mcpTestResult.value = await testDesktopMcpServer(payload);
+  } catch (err) {
+    mcpTestResult.value = { ok: false, error: err.response?.data?.error?.message || err.message || '测试请求失败' };
+  } finally {
+    mcpTesting.value = '';
+  }
+}
+
+async function testMcpRow(row) {
+  mcpTesting.value = row.name;
+  mcpTestResult.value = null;
+  try {
+    mcpTestResult.value = await testDesktopMcpServer({ name: row.name });
+  } catch (err) {
+    mcpTestResult.value = { ok: false, error: err.response?.data?.error?.message || err.message || '测试请求失败' };
+  } finally {
+    mcpTesting.value = '';
+  }
+}
+
+async function saveMcpServer() {
+  const payload = parseMcpForm();
+  if (!payload.name || !payload.command) {
+    ElMessage.warning('请填写插件名和启动命令');
+    return;
+  }
+  mcpSaving.value = true;
+  try {
+    const res = await upsertDesktopMcpServer(payload);
+    ElMessage.success(res.message || '已保存；重启桌面端后生效');
+    mcpDialogOpen.value = false;
+    await loadMcpServers();
+  } catch { /* 拦截器提示 */ } finally {
+    mcpSaving.value = false;
+  }
+}
+
+async function removeMcpRow(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确定移除插件「${row.name}」吗？桌面端重启后将不再加载它（可随时重新添加）。`,
+      '移除插件',
+      { confirmButtonText: '移除', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch { return; }
+  try {
+    const res = await deleteDesktopMcpServer(row.name);
+    ElMessage.success(res.message || '已移除');
+    await loadMcpServers();
+  } catch { /* 拦截器提示 */ }
+}
+
+async function loadCurrentVersion() {
+  // 优先 /status 自带版本（本地即时）；未带版本的旧实例退回更新检查接口
+  try {
+    const res = await getRouterStatus({ skipGlobalError: true });
+    if (res?.version) {
+      currentVersion.value = String(res.version);
+      return;
+    }
+  } catch { /* 退回下一路径 */ }
+  try {
+    const res = await checkForUpdate({ skipGlobalError: true });
+    if (res?.current) currentVersion.value = String(res.current);
+  } catch { /* 版本取不到时页头显示 v? */ }
+}
 
 // ---- Codex 桌面端接入（一键官方直连 / 一键接入路由 + 模型动态加载） ----
 const desktopLoading = ref(false);

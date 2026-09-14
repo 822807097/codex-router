@@ -72,11 +72,14 @@ const currentRouteTitle = computed(() => {
 });
 
 function emitTestAll() {
-  // 测速事件只在模型页监听；从其他页面点击时先跳转再派发，
-  // 避免按钮「点了没反应」——loading 状态由事件往返控制。
+  // 测速只在模型页执行：跨页时用 query 中转（?testAll=1），模型页挂载后消费并
+  // 派发本地事件——直接派发 window 事件会赶在懒加载组件挂载前丢失，顶栏 loading
+  // 永久卡死（2026-09-13 审计实锤）。
   const isModelsPage = route.path.includes('/models');
   if (!isModelsPage) {
-    router.push('/models');
+    testingAll.value = true;
+    router.push({ path: '/models', query: { testAll: '1' } });
+    return;
   }
   testingAll.value = true;
   window.dispatchEvent(new CustomEvent('test-all-models'));

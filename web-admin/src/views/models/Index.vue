@@ -186,7 +186,7 @@
                 size="small"
                 type="primary"
                 plain
-                :loading="testingSlug === m.slug"
+                :loading="testingSlugs.has(m.slug)"
                 @click="testLatency(m)"
               >
                 <el-icon class="mr-1"><Lightning /></el-icon>
@@ -271,7 +271,7 @@ my-glm=glm-5.3-flash"
           <div class="text-xs text-secondary mt-1">每行一个；写法 slug=厂商真实模型码 表示该模型对外用 slug、对厂商用真实码（自动映射）</div>
         </el-form-item>
         <el-form-item label="所属分组 (Group)">
-          <el-select v-model="form.group" placeholder="默认按厂商名称分组，也可自建" filterable allow-create default-first-option>
+          <el-select v-model="form.group" placeholder="默认按厂商名称分组，也可自建" filterable allow-create default-first-option @change="form.groupTouched = true">
             <el-option v-for="name in groupNames" :key="name" :label="name" :value="name" />
           </el-select>
           <div class="text-xs text-secondary mt-1">留空/回车保持默认 = 按厂商名称分组；分组只影响本页展示</div>
@@ -279,7 +279,7 @@ my-glm=glm-5.3-flash"
       </el-form>
       <template #footer>
         <el-button @click="showAddModal = false">取消</el-button>
-        <el-button type="primary" @click="handleAddModel">保存全部模型</el-button>
+        <el-button type="primary" :loading="saving" @click="handleAddModel">保存全部模型</el-button>
       </template>
     </el-dialog>
 
@@ -669,8 +669,8 @@ my-model=real-vendor-name"
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
-import { useRoute } from 'vue-router';
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import {
   testModelLatency,
   getModels,
@@ -736,10 +736,13 @@ const codexModelOptions = ref([]);
 const codexDefaultModel = ref('');
 
 const showAddModal = ref(false);
-const testingSlug = ref(null);
+// 批量测速用 Set 支持并发各自转圈（不可变替换触发响应式）
+const testingSlugs = ref(new Set());
 const latencies = ref({});
-const form = ref({ vendor: '', apiBase: '', keysText: '', modelsText: '', group: '' , proxy: { mode: 'direct', url: '' } , wireApi: 'chat' });
+const form = ref({ vendor: '', apiBase: '', keysText: '', modelsText: '', group: '', groupTouched: false, proxy: { mode: 'direct', url: '' } , wireApi: 'chat' });
 const showGroupManage = ref(false);
+// 添加模型长事务防重复提交
+const saving = ref(false);
 
 function syncVendorGroup() {
   // 分组默认跟随厂商名称（用户选过分组就不覆盖）
@@ -784,7 +787,7 @@ function openAddModal() {
   showAddModal.value = true;
 }
 
-// ---- 请求/响应查看器（sub2api 式：真实请求与回复原文） ----
+// ---- 请求/响应查看器（参考开源方案：真实请求与回复原文） ----
 const showRequestLog = ref(false);
 const requestLogLoading = ref(false);
 const requestLogRows = ref([]);
@@ -1563,7 +1566,7 @@ async function loadModels() {
   }
 }
 
-// 测试结果弹窗：展示真实请求与模型回复（sub2api 式）
+// 测试结果弹窗：展示真实请求与模型回复（参考开源方案）
 const showTestReply = ref(false);
 const testReplyRows = ref([]);
 
@@ -1579,21 +1582,26 @@ function openTestReply(res, displayName) {
   showTestReply.value = true;
 }
 
-async function testLatency(m) {
-  testingSlug.value = m.slug;
+async function testLatency(m, { silent = false } = {}) {
+  testingSlugs.value = new Set([...testingSlugs.value, m.slug]);
   try {
     const res = await testModelLatency(m.slug, m.target);
     latencies.value[m.slug] = res;
-    if (res.ok) {
-      ElMessage.success(`${m.displayName} 测试完成: ${res.latencyMs}ms`);
-    } else {
-      ElMessage.warning(`${m.displayName} 测试失败: ${res.error}`);
+    // 批量测速（silent）完全静音：几十个模型逐个弹 toast 会洪水叠加（2026-09-13 审查）
+    if (!silent) {
+      if (res.ok) {
+        ElMessage.success(`${m.displayName} 测试完成: ${res.latencyMs}ms`);
+      } else {
+        ElMessage.warning(`${m.displayName} 测试失败: ${res.error}`);
+      }
+      openTestReply(res, m.displayName);
     }
-    openTestReply(res, m.displayName);
   } catch (err) {
     latencies.value[m.slug] = { ok: false, error: err.response?.data?.error?.message || err.message };
   } finally {
-    testingSlug.value = null;
+    const next = new Set(testingSlugs.value);
+    next.delete(m.slug);
+    testingSlugs.value = next;
   }
 }
 
@@ -1604,7 +1612,7 @@ async function handleTestAll() {
   const CONCURRENCY = 4;
   try {
     for (let i = 0; i < allModels.length; i += CONCURRENCY) {
-      await Promise.allSettled(allModels.slice(i, i + CONCURRENCY).map((m) => testLatency(m)));
+      await Promise.allSettled(allModels.slice(i, i + CONCURRENCY).map((m) => testLatency(m, { silent: true })));
     }
     // 批量完成后汇总展示全部回复（单模型测试的弹窗已在 testLatency 打开过）
     testReplyRows.value = allModels
@@ -1730,6 +1738,9 @@ async function handleSaveEdit() {
     patch.auto_compact_token_limit = null;
   } else if (Number(compactRaw) > 0 || /^[0-9.]+[kKmM]$/.test(compactRaw)) {
     patch.auto_compact_token_limit = parseContextTokens(compactRaw);
+  } else {
+    // 与 context_window 的警告口径一致：格式不识别时显式告知，不静默丢字段
+    ElMessage.warning('自动压缩阈值格式无法识别（示例：128000 或 128k），该字段未修改');
   }
   editSaving.value = true;
   try {
@@ -1792,6 +1803,7 @@ async function handleDeleteModel(m) {
 }
 
 async function handleAddModel() {
+  if (saving.value) return;
   const vendor = form.value.vendor?.trim();
   if (!vendor) {
     ElMessage.warning('请填写厂商名称');
@@ -1842,6 +1854,7 @@ async function handleAddModel() {
     })),
     { kind: 'target.create', target },
   ];
+  saving.value = true;
   try {
     await commitModelOperations(operations);
     // 明文/环境变量密钥逐把进密钥池（priority=行序，先填的先用），全厂商共用
@@ -1866,7 +1879,9 @@ async function handleAddModel() {
     ElMessage.success(`${parts.join('，')}；重启路由与 Codex 后完全生效`);
     showAddModal.value = false;
     await loadModels();
-  } catch { /* 错误提示由请求拦截器统一处理 */ }
+  } catch { /* 错误提示由请求拦截器统一处理 */ } finally {
+    saving.value = false;
+  }
 }
 
 // ---- 自动拉取模型 ----
@@ -2013,17 +2028,42 @@ function resetFetchState() {
   selectedFetchModels.value = [];
 }
 
-onMounted(() => {
-  window.addEventListener('test-all-models', handleTestAll);
-  loadModels();
-  refreshVendorGroups();
-  loadCodexDefaultModel();
-  // 「系统与路由配置」页的主按钮带 ?add=1 跳转过来：自动打开添加模型弹窗
-  const route = useRoute();
+// useRoute/useRouter 必须在 setup 顶层调用（onMounted 回调里 inject 已失效，
+// 此前 ?add=1 自动开弹窗因此从未生效）
+const route = useRoute();
+const router = useRouter();
+
+// 路由参数意图消费：?add=1 自动打开添加弹窗（系统设置页跳转）；
+// ?testAll=1 自动测速（顶栏跨页触发——直接派发 window 事件会赶在懒加载
+// 组件挂载前丢失，改走 query 中转，挂载后必定可消费）。
+// testAll 必须等模型清单加载完成：挂载即测会拿到空的 modelGroups，
+// 0 个模型被测却弹「全部完成」（2026-09-13 对抗自查实锤假成功）。
+async function consumeRouteIntents() {
   if (route.query?.add === '1') {
+    router.replace({ query: { ...route.query, add: undefined } });
     openAddModal();
   }
+  if (route.query?.testAll === '1') {
+    router.replace({ query: { ...route.query, testAll: undefined } });
+    try { await modelsReady; } catch { /* 加载失败时不测速，错误提示由 loadModels 负责 */ }
+    handleTestAll();
+  }
+}
+
+// 模型清单就绪信号：onMounted 发起、首次加载结束（无论成败）后 resolve
+let resolveModelsReady = () => {};
+const modelsReady = new Promise((resolve) => { resolveModelsReady = resolve; });
+
+onMounted(() => {
+  window.addEventListener('test-all-models', handleTestAll);
+  loadModels().finally(resolveModelsReady);
+  refreshVendorGroups();
+  loadCodexDefaultModel();
+  consumeRouteIntents();
 });
+
+// 已在模型页时 query 再变化（顶栏重复点击）也要响应
+watch(() => route.query, consumeRouteIntents);
 
 onUnmounted(() => {
   window.removeEventListener('test-all-models', handleTestAll);

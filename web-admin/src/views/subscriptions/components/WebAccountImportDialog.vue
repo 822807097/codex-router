@@ -4,9 +4,12 @@
 import { ref, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import { addAccount } from '../../../api/accounts.js';
+import { useBreakpoint } from '../../../composables/useBreakpoint.js';
 
 const props = defineProps({ modelValue: Boolean });
 const emit = defineEmits(['update:modelValue', 'success']);
+
+const { isMobile } = useBreakpoint();
 
 const visible = computed({
   get: () => props.modelValue,
@@ -19,7 +22,7 @@ const importing = ref(false);
 
 // 解析粘贴内容：每行一个账号。支持三种行形态：
 // 1) 纯 access_token（JWT 三段式，含 refresh_token 时也认）
-// 2) JSON 对象（含 access_token / refreshToken 键，兼容 sub2api/chatgpt2api 导出格式）
+// 2) JSON 对象（含 access_token / refreshToken 键，兼容其他开源方案导出格式）
 // 3) 容错：tab/逗号分隔「备注 + token」
 function parseLines(text) {
   const items = [];
@@ -95,7 +98,7 @@ async function importTokens() {
   <el-dialog
     v-model="visible"
     title="导入 ChatGPT 网页会话账号"
-    width="520px"
+    :width="isMobile ? '94%' : '520px'"
     destroy-on-close
   >
     <el-alert type="warning" :closable="false" class="mb-3">

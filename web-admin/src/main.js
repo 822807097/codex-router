@@ -1,6 +1,7 @@
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import ElementPlus from 'element-plus';
+import zhCn from 'element-plus/es/locale/lang/zh-cn';
 import * as ElementPlusIconsVue from '@element-plus/icons-vue';
 import 'element-plus/dist/index.css';
 
@@ -23,6 +24,7 @@ app.use(pinia);
 // axios 拦截器需要读写全局离线状态（Pinia 就绪后绑定，避免循环依赖）
 bindAppStore(useAppStore(pinia));
 app.use(router);
-app.use(ElementPlus);
+// Element Plus 文案本地化（分页/日期选择器等内置组件显示中文）
+app.use(ElementPlus, { locale: zhCn });
 
 app.mount('#app');

@@ -128,22 +128,37 @@ function base64UrlDecode(value) {
   }
 }
 
+/** base64url（无 +/=，避免破坏 ss:// 链接的 userinfo 正则），与后端 parseUserInfoPart 兼容 */
+function base64UrlEncode(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = '';
+  bytes.forEach((b) => { bin += String.fromCharCode(b); });
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
 /** 把当前字段组装成标准节点链接；字段不全时返回空串。 */
 function buildUrl() {
   const h = host.value?.trim();
   const p = Number(port.value);
   if (!h || !Number.isInteger(p) || p < 1 || p > 65535) return '';
-  const userInfo = (() => {
-    if (protocol.value === 'ss') return `${method.value || 'aes-256-gcm'}:${password.value}`;
-    if (protocol.value === 'trojan' || protocol.value === 'vless') return encodeURIComponent(password.value);
-    if (password.value) return encodeURIComponent(password.value);
-    return '';
-  })();
   let url;
-  if (protocol.value === 'ss' || protocol.value === 'trojan' || protocol.value === 'vless') {
-    url = `${protocol.value}://${userInfo}@${h}:${p}`;
+  if (protocol.value === 'ss') {
+    // ss 密码含 : / @ 等字符会破坏链接结构：统一走 base64url(method:password) 形态，
+    // 后端 parseUserInfoPart 同时支持明文与 base64 两种形态
+    url = `ss://${base64UrlEncode(`${method.value || 'aes-256-gcm'}:${password.value}`)}@${h}:${p}`;
+  } else if (protocol.value === 'trojan' || protocol.value === 'vless') {
+    url = `${protocol.value}://${encodeURIComponent(password.value)}@${h}:${p}`;
   } else {
-    url = `${protocol.value}://${h}:${p}`;
+    // socks5/http：密码字段语义是「用户名:密码」（可选），逐段编码（冒号是分隔符保留原样）
+    let auth = '';
+    if (password.value) {
+      const raw = String(password.value);
+      const idx = raw.indexOf(':');
+      const user = idx >= 0 ? raw.slice(0, idx) : raw;
+      const pass = idx >= 0 ? raw.slice(idx + 1) : '';
+      auth = `${encodeURIComponent(user)}:${encodeURIComponent(pass)}`;
+    }
+    url = `${protocol.value}://${auth ? `${auth}@` : ''}${h}:${p}`;
   }
   if ((protocol.value === 'trojan' || protocol.value === 'vless') && sni.value?.trim()) {
     url += `?security=tls&sni=${encodeURIComponent(sni.value.trim())}`;

@@ -69,15 +69,18 @@
       </el-menu>
     </div>
 
-    <!-- 底部服务状态指示 -->
+    <!-- 底部服务状态指示：真实在线状态（网关请求拦截器置位）+ 实际端口 -->
     <div class="border-t border-default bg-canvas/50" :class="collapsed ? 'p-2' : 'p-4'">
-      <el-tooltip content="路由服务正在运行 (15730)" placement="top" :disabled="!collapsed">
+      <el-tooltip :content="statusLabel" placement="top" :disabled="!collapsed">
         <div
-          class="flex items-center gap-2 text-xs text-secondary"
-          :class="collapsed ? 'justify-center' : ''"
+          class="flex items-center gap-2 text-xs"
+          :class="[collapsed ? 'justify-center' : '', serviceOnline ? 'text-secondary' : 'text-danger']"
         >
-          <span class="w-2 h-2 shrink-0 rounded-full bg-success-text animate-pulse"></span>
-          <span v-if="!collapsed">路由服务正在运行 (15730)</span>
+          <span
+            class="w-2 h-2 shrink-0 rounded-full animate-pulse"
+            :class="serviceOnline ? 'bg-success-text' : 'bg-danger-text'"
+          ></span>
+          <span v-if="!collapsed">{{ statusLabel }}</span>
         </div>
       </el-tooltip>
     </div>
@@ -85,8 +88,10 @@
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, ref, onMounted } from 'vue';
 import { DataAnalysis, FolderOpened, Key, Setting, Lock } from '@element-plus/icons-vue';
+import { useAppStore } from '../stores/app.js';
+import { getRouterStatus } from '../api/system.js';
 
 const props = defineProps({
   collapsed: { type: Boolean, default: false },
@@ -97,6 +102,22 @@ const props = defineProps({
   panelBuild: { type: Object, default: null },
 });
 const emit = defineEmits(['navigate', 'check-update']);
+
+// 真实服务状态：gatewayOffline 由请求拦截器在网关失联时置位（此前是写死的
+// 恒绿假状态——服务死了侧栏还显示「正在运行」，2026-09-13 审计实锤）
+const appStore = useAppStore();
+const serviceOnline = computed(() => !appStore.gatewayOffline);
+const routerPort = ref(15730);
+onMounted(async () => {
+  try {
+    const res = await getRouterStatus({ skipGlobalError: true });
+    const port = Number(res?.port);
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) routerPort.value = port;
+  } catch { /* 取不到端口时展示默认 15730 */ }
+});
+const statusLabel = computed(() => (serviceOnline.value
+  ? `路由服务运行中 (${routerPort.value})`
+  : '路由服务连接中断，重连中…'));
 
 // 版本徽标：常规态「vX.Y.Z · 产物短 commit」证明面板与源码同版；
 // 有更新时不缀 commit——那是当前旧产物的 commit，缀上会被误读成更新目标的版本。

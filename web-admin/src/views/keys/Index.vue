@@ -144,7 +144,7 @@
     </AsyncContainer>
 
     <!-- 创建密钥弹窗 -->
-    <el-dialog v-model="showCreateDialog" title="创建 API 密钥" width="520px" class="custom-dialog">
+    <el-dialog v-model="showCreateDialog" title="创建 API 密钥" :width="isMobile ? '94%' : '520px'" class="custom-dialog">
       <!-- 对外 API 接入信息：与创建 key 同屏展示，任意工具/智能体直接复制配置 -->
       <div class="mb-4 border border-border/60 rounded-lg p-3 bg-canvas space-y-2">
         <div class="flex items-center justify-between">
@@ -191,7 +191,7 @@
     </el-dialog>
 
     <!-- 密钥单次展示弹窗 (高安全级别) -->
-    <el-dialog v-model="showKeyModal" title="🎉 API 密钥创建成功" width="560px" :close-on-click-modal="false" class="custom-dialog">
+    <el-dialog v-model="showKeyModal" title="🎉 API 密钥创建成功" :width="isMobile ? '94%' : '560px'" :close-on-click-modal="false" class="custom-dialog">
       <div class="space-y-4">
         <el-alert
           type="warning"
@@ -240,7 +240,7 @@
     </el-dialog>
 
     <!-- 客户端接入指引弹窗 -->
-    <el-dialog v-model="showGuideModal" title="客户端接入配置指引" width="580px" class="custom-dialog">
+    <el-dialog v-model="showGuideModal" title="客户端接入配置指引" :width="isMobile ? '94%' : '580px'" class="custom-dialog">
       <div class="space-y-4 text-xs">
         <div>
           <div class="font-semibold text-primary mb-1">1. Base URL</div>
@@ -280,11 +280,14 @@ env_key = "ROUTER_API_KEY"
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { listKeys, createKey, revokeKey, syncCodex } from '../../api/keys.js';
 import { getRouterStatus } from '../../api/system.js';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AsyncContainer from '../../components/AsyncContainer.vue';
+import { useBreakpoint } from '../../composables/useBreakpoint.js';
+
+const { isMobile } = useBreakpoint();
 
 const loading = ref(true);
 const loadError = ref('');
@@ -396,15 +399,16 @@ function showUsageGuide(row) {
   showGuideModal.value = true;
 }
 
-const curlSnippet = `curl http://127.0.0.1:15730/v1/chat/completions \\
+// 接入示例跟随 routerBaseUrl（从 /status 动态取端口）插值，保证与页面顶部展示的 Base URL 一致
+const curlSnippet = computed(() => `curl ${routerBaseUrl.value}/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer sk-router-你的密钥" \\
-  -d '{"model":"gpt-5.5","messages":[{"role":"user","content":"你好"}]}'`;
+  -d '{"model":"gpt-5.5","messages":[{"role":"user","content":"你好"}]}'`);
 
-const pythonSnippet = `from openai import OpenAI
+const pythonSnippet = computed(() => `from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://127.0.0.1:15730/v1",
+    base_url="${routerBaseUrl.value}",
     api_key="sk-router-你的密钥",
 )
 
@@ -412,12 +416,12 @@ resp = client.chat.completions.create(
     model="gpt-5.5",
     messages=[{"role": "user", "content": "你好"}],
 )
-print(resp.choices[0].message.content)`;
+print(resp.choices[0].message.content)`);
 
-const nodeSnippet = `import OpenAI from "openai";
+const nodeSnippet = computed(() => `import OpenAI from "openai";
 
 const client = new OpenAI({
-    baseURL: "http://127.0.0.1:15730/v1",
+    baseURL: "${routerBaseUrl.value}",
     apiKey: "sk-router-你的密钥",
 });
 
@@ -425,7 +429,7 @@ const resp = await client.chat.completions.create({
     model: "gpt-5.5",
     messages: [{ role: "user", content: "你好" }],
 });
-console.log(resp.choices[0].message.content);`;
+console.log(resp.choices[0].message.content);`);
 
 async function copySnippet(text) {
   try {

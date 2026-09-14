@@ -17,6 +17,16 @@ $router = Join-Path $here '..\codex-router.mjs'
 if (-not (Test-Path $router)) { $router = Join-Path $here 'codex-router.mjs' }
 $cfgPath = Join-Path (Split-Path $router) 'config.json'
 
+# 维护标记：停止~就绪期间让 watchdog 跳过拉起（排空期 healthz 必失败，不标记会被
+# watchdog 判死并再触发一次 restart，与本次重启互相打架）。就绪/失败都清除。
+$maintenanceMarker = Join-Path $here '.watchdog-maintenance'
+$cleanupMarker = {
+    Remove-Item $maintenanceMarker -Force -ErrorAction SilentlyContinue
+}
+# 优雅窗口可配（默认 120s）：覆盖常见流式任务的排空；事件循环冻结的进程不响应
+# SIGINT（2026-09-08 实锤），超窗强杀避免 restart 卡满 600s。ROUTER_RESTART_GRACE_SEC 可调大。
+$graceSeconds = if ($env:ROUTER_RESTART_GRACE_SEC) { [int]$env:ROUTER_RESTART_GRACE_SEC } else { 120 }
+
 # Ctrl+C 事件需要附加到目标进程的控制台；目标进程必须拥有独立控制台（Start-Process 默认新建）。
 Add-Type -TypeDefinition @'
 using System;
@@ -49,6 +59,8 @@ function Send-CtrlC($targetPid) {
 # 1. 优雅停止旧进程（存在时）
 $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
 if ($conns) {
+    # 进入停止窗口：写维护标记压制 watchdog
+    Set-Content -Path $maintenanceMarker -Value "restart $(Get-Date -Format o)" -Encoding ASCII
     $oldPids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
     foreach ($oldPid in $oldPids) {
         Say "停止旧进程 PID=$oldPid（优雅排空，在跑任务将继续完成）"
@@ -66,16 +78,16 @@ if ($conns) {
         }
     }
     # 1c. 等待旧进程排空退出（路由内部有 10 分钟安全阀）。
-    # 事件循环冻结的进程不响应 SIGINT（2026-09-08 实测）：优雅窗口 40 秒后
-    # 强制结束，避免 restart 卡满 600 秒超时、用户以为脚本死了。
-    $graceDeadline = (Get-Date).AddSeconds(40)
+    # 事件循环冻结的进程不响应 SIGINT（2026-09-08 实测）：优雅窗口（可配，默认
+    # 120s）后强制结束，避免 restart 卡满 600 秒超时、用户以为脚本死了。
+    $graceDeadline = (Get-Date).AddSeconds($graceSeconds)
     $forceDeadline = (Get-Date).AddSeconds(600)
     foreach ($oldPid in $oldPids) {
         $forceStopped = $false
         while (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {
-            if ((Get-Date) -gt $forceDeadline) { Say "等待旧进程排空超时，请稍后重试" Red; exit 1 }
+            if ((Get-Date) -gt $forceDeadline) { Say "等待旧进程排空超时，请稍后重试" Red; & $cleanupMarker; exit 1 }
             if (-not $forceStopped -and (Get-Date) -gt $graceDeadline) {
-                Say "PID=$oldPid 未在优雅窗口内退出（疑似事件循环冻结），强制结束" Yellow
+                Say "PID=$oldPid 未在 ${graceSeconds}s 优雅窗口内退出（疑似事件循环冻结），强制结束" Yellow
                 Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
                 $forceStopped = $true
             }
@@ -112,9 +124,9 @@ for ($i = 0; $i -lt 10; $i++) {
     Start-Sleep -Seconds 1
     try {
         $h = Invoke-RestMethod -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 2
-        if ($h.ok) { Say "codex-router 已无感重启，监听 127.0.0.1:$port"; exit 0 }
+        if ($h.ok) { & $cleanupMarker; Say "codex-router 已无感重启，监听 127.0.0.1:$port"; exit 0 }
     } catch { }
 }
+& $cleanupMarker
 Say "重启后未检测到监听，请手动运行 start-router.ps1 查看报错" Red
-exit 1
 exit 1

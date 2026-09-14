@@ -4,9 +4,13 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${ROUTER_PORT:-15730}"
 
-PID=$(lsof -ti :$PORT -sTCP:LISTEN 2>/dev/null || true)
+# shellcheck source=lib-port-pid.sh
+source "$SCRIPT_DIR/lib-port-pid.sh"
+
+PID=$(router_pid "$PORT")
 
 if [ -n "$PID" ]; then
     echo "codex-router 运行中 PID=$PID"
