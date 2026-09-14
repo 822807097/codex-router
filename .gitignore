@@ -90,4 +90,5 @@ docs/plans/
 
 # 看门狗/调试运行时产物
 scripts/.watchdog-state
+scripts/.watchdog-maintenance
 .freeze-test/
