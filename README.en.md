@@ -63,7 +63,8 @@ Point your client's `base_url` at `http://127.0.0.1:15730/v1`; the router forwar
 | **One-stop group editor** | The "Edit group" dialog on each vendor card: rename the group (keys migrate automatically), API base, wire protocol, proxy, and inline key management (bulk add / delete with upstream verification) |
 | **Dedicated-channel exclusive routing** | A model matched by a vendor's exact-enumeration channel stays on that channel only: when it rate-limits you get an honest error, **never a silent failover burning another vendor's quota** |
 | Free-form model groups | Model cards can be freely edited / deleted / regrouped |
-| Per-channel proxy | Each channel can go direct / via global proxy / via a custom node (paste ss / trojan / vless / socks5 / http links) |
+| Desktop MCP plugin management | Manage Codex desktop native plugins (the `[mcp_servers.*]` sections of `config.toml`) from the panel: list / enable-disable / connection test / add-edit-delete, compatible with the MCP side of codex++ ecosystem plugins - e.g. the Windows computer-control plugin that lets any model operate the computer |
+| Per-channel proxy | Each channel can go direct / via global proxy / via a custom node (paste ss / trojan / vless / socks5 / http links; **authenticated proxies with username/password are supported** - both SOCKS5 and HTTP auth) |
 | **Resume any task with any model (no new chat)** | When the official quota runs out or you just want a different model, switch mid-task and hit "continue from breakpoint" in the same conversation: official subscription to a custom model, GLM to DeepSeek, etc. - protocol conversion (tool calls, reasoning format, session metadata) is handled by the router |
 | Cross-model continuation | Context trimming auto-generates a "goal checkpoint" so switching models never drops the task |
 | Usage dashboard | Daily token trends, activity heatmap, per-model breakdown |
@@ -179,6 +180,8 @@ Full details in [docs/ADVANCED.en.md](docs/ADVANCED.en.md). Quick map of "what c
 - **Graceful restart**: the panel header's "graceful restart" swaps in new code without killing in-flight tasks.
 - **Usage stats**: daily token trends, activity heatmap, per-model breakdown.
 - **Full Codex plugin adaptation**: Codex tool declarations (shell, file editing, MCP, web search, …) are converted into each upstream's generic tool format.
+- **Desktop MCP plugin management**: the "Desktop MCP plugins" card in Settings manages desktop native plugins (`[mcp_servers.*]` sections of `config.toml`) - enable/disable (official `enabled` key, disabling keeps the config), connection test (actually launches the plugin and lists its tools), add/edit/delete; restart the desktop app to apply. See [docs/ADVANCED.en.md](docs/ADVANCED.en.md).
+- **Router built-in tool bridge**: on channels without official server-side tools (web pool, etc.), the router can inject and execute web search, MCP tools and skills (the `tools` block of `config.json`, see ADVANCED).
 
 ## 7. FAQ
 
@@ -207,7 +210,10 @@ This is ChatGPT desktop's official behavior: when the official account quota run
 Check the desktop log first: `unknown variant` / `missing field` = a `models.json` field problem; `usage limit` = a quota problem. This project auto-fills all required fields, so the former shouldn't happen; if it ever does, re-save any model on the model-groups page to trigger the auto-fix.
 
 **Q: Proxy unreachable / need a global proxy?**
-See [docs/ADVANCED.en.md "network & proxy"](docs/ADVANCED.en.md). Per-channel proxies are supported; custom proxies accept pasted airport node links (ss / trojan / vless / socks5 / http).
+See [docs/ADVANCED.en.md "network & proxy"](docs/ADVANCED.en.md). Per-channel proxies are supported; custom proxies accept pasted airport node links (ss / trojan / vless / socks5 / http). Authenticated proxies with username/password are also supported (`socks5://user:pass@host:port` links, or fill the fields in the panel).
+
+**Q: The desktop's official 🖥️ computer tool reports `apps=[]` / `cua.getApp is not a function`?**
+That is a **platform limitation of ChatGPT desktop's official computer plugin itself**: its app-level control APIs (listing apps, operating per-app) are officially implemented for macOS only - on Windows device discovery returns empty and those functions don't exist. This is unrelated to this project (that chain runs entirely inside the desktop app and never touches the router; the same happens on official direct connections). For full computer control on Windows use the desktop MCP plugin (e.g. the built-in `windows-computer-use` registration: 18 tools with per-app instructions, works with any model); on Windows the official plugin only offers browser control.
 
 ## 8. Security
 

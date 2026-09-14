@@ -14,6 +14,8 @@
 | `CURSOR_GATEWAY_PORT` | Built-in Cursor gateway port | `6718` |
 | `CURSOR_GATEWAY_ADMIN_PASSWORD` | Admin password used for auth between the panel and the Cursor gateway (**set it yourself**) | none (the panel's Cursor page reminds you when unset) |
 | `CURSOR_KEY` | Fallback key when adding a Cursor account (may be left blank in the panel) | none |
+| `ROUTER_RESTART_GRACE_SEC` | Grace window (seconds) the restart script waits for the old process to drain before force-killing | `120` |
+| `CHATGPT_WEB_MCP_INJECT` | Escape hatch for web-pool computer tool injection: set `0` to force off (takes priority over `tools.webPoolInject`) | unset (injection on) |
 
 > Vendor API keys are always passed via environment variables — see the next section.
 
@@ -66,6 +68,8 @@ Three modes per channel (a dropdown in the panel, beginner-friendly):
    - `socks5://` / `http://` (local proxy software)
 
 Subscription accounts (Claude/Gemini/ChatGPT) can each have their own independent proxy too, without affecting other channels.
+
+**Authenticated proxies**: SOCKS5 and HTTP proxies both support username/password auth - paste a `socks5://user:pass@host:port` style link, or fill the panel's password field as `username:password`. The router performs RFC 1929 username/password sub-negotiation during the SOCKS5 handshake and sends `Proxy-Authorization` on HTTP proxies. If a node link's password contains special characters (`:` `/` `@`), prefer filling the fields separately in the panel; links are auto-encoded as base64url where needed.
 
 ## Channel key pools (multiple keys per channel)
 
@@ -156,6 +160,47 @@ Content-Type: application/json
 
 The "usage stats" page shows: last 7/30 days token totals, call counts, active days, most-used models, a GitHub-style activity heatmap, per-day multi-model stacked bars, and per-model breakdowns (including thinking tokens and cache hits).
 
+## Desktop MCP plugin management (panel)
+
+The "Desktop MCP plugins" card in Settings manages Codex desktop's **official plugin mechanism** - the `[mcp_servers.*]` sections of `config.toml` (plugins are launched and executed by the desktop app itself, effective for both official and routed models):
+
+- **List**: parses existing sections (command/args/timeouts/env sub-sections/enable state); sections containing advanced fields the panel doesn't recognize are automatically marked read-only (preventing field loss on rewrite).
+- **Enable/disable**: an inline switch per row that writes the official `enabled` key - disabling keeps the config; the desktop skips loading after a restart.
+- **Connection test**: actually launches the plugin (initialize + tools/list) and lists its tools with latency; "test before save" supported.
+- **Add/edit/delete**: form-driven command/args/startup timeout/per-call timeout/tool allowlist/env; writes go through pre-write TOML validation + automatic backup, mutually exclusive with other desktop config writes.
+- **Restart the desktop app to apply** (button in the panel); compatible with the MCP side of codex++ ecosystem plugins (their manifest's MCP server is the same config.toml section).
+
+For Windows computer control we recommend the `windows-computer-use` plugin (18 computer-control tools, lets any model operate local apps). For the Mac-only limitation of the desktop's built-in computer plugin, see the [README FAQ](../README.en.md).
+
+## Router built-in tool bridge (tools block)
+
+On the web pool and channels without official server-side tools, the router can inject and execute tools on their behalf (top-level `tools` block of `config.json`; restart the router after changes):
+
+```jsonc
+{
+  "tools": {
+    "webSearch": { "enabled": true, "provider": "duckduckgo", "maxResults": 5 },  // web search (duckduckgo keyless / tavily needs TAVILY_API_KEY)
+    "mcpServers": [ { "name": "my-tool", "command": "node", "args": ["server.js"], "env": { "K": "V" }, "enabled": true } ],  // router-side MCP (stdio)
+    "skills": [ { "name": "my-skill", "content": "skill prompt/doc", "enabled": true } ],
+    "maxBridgeRounds": 8,        // tool loop round cap (1..32, default 8; exhaustion is explicitly noted in the answer)
+    "webPoolInject": true        // web-pool computer tool catalog injection (CHATGPT_WEB_MCP_INJECT=0 force-off)
+  }
+}
+```
+
+- Web-pool sessions automatically inject the Windows computer-control tool catalog (same source as the desktop MCP plugin); injected tool results are head/tail truncated; protocol-block parsing tolerates common model format deviations; malformed blocks are counted and surfaced in the response.
+- Router-side MCP servers have their processes reaped after 5 minutes idle; one server failing to start doesn't affect the other tools.
+
+## Official incremental continuation (off by default)
+
+To save the official 5-hour window quota, the router used to rewrite full-session resends into `previous_response_id` increments. **Since 2026-09-12 the official backend no longer supports that parameter** (and forces `store:false`), so this feature is off by default; if enabled, the router auto-fuses after consecutive rejections (disabled for the process lifetime, re-probed on restart):
+
+```jsonc
+{ "officialIncremental": { "enabled": true, "maxEntries": 256, "maxBytes": 67108864 } }
+```
+
+Once upstream restores support, set `enabled: true` explicitly to re-enable. With it off nothing else changes - every turn is simply sent in full (same as official direct behavior).
+
 ## Client API keys (optional)
 
 After you create an `sk-router-*` key on the "API key management" page, the router enters auth mode: clients must send `Authorization: Bearer <key>` to call it. Keys are stored hashed only; revocation takes effect immediately. On creation you can also one-click sync the config into Codex (writes `config.toml` + a system environment variable). Creating no keys = open access (fine for a personal, single-user machine).
@@ -164,6 +209,7 @@ After you create an `sk-router-*` key on the "API key management" page, the rout
 
 - Debug logs: `router.log` (structured JSON) and `router-console.out.log` (process console) in the working directory. For crashes / startup failures, check the console log first.
 - Graceful restart: panel header button; or `scripts/restart-router.ps1` (Windows) / `scripts/restart-router.sh`. A restart waits for the old process to drain in-flight tasks before the new process takes over.
+- Ops scripts also work under Windows Git Bash (`bash scripts/status-router.sh` / `stop-router.sh` / `restart-router.sh`; they fall back to netstat/PowerShell automatically). `stop-router.sh` writes a maintenance marker when stopping so the watchdog won't resurrect a deliberate stop; the marker clears automatically on the next successful start.
 - The admin API accepts loopback Host + exact same-origin only; CSP allows same-origin scripts/styles and blocks third-party script injection.
 
 ## Feedback & community

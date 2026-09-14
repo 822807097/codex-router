@@ -14,6 +14,8 @@
 | `CURSOR_GATEWAY_PORT` | 内置 Cursor 网关端口 | `6718` |
 | `CURSOR_GATEWAY_ADMIN_PASSWORD` | 管理面板与 Cursor 网关之间鉴权用的管理员密码（**必须自行设置**） | 无（未设置时面板的 Cursor 页会提示） |
 | `CURSOR_KEY` | 添加 Cursor 账号时的兜底 Key（面板可留空取用） | 无 |
+| `ROUTER_RESTART_GRACE_SEC` | 重启脚本等待旧进程优雅排空的窗口（秒），超窗才强杀 | `120` |
+| `CHATGPT_WEB_MCP_INJECT` | 网页池电脑工具注入的逃生门：设为 `0` 强制关闭（优先级高于 `tools.webPoolInject`） | 未设置（默认注入） |
 
 > 各模型供应商的 Key 一律通过环境变量传入，见下节。
 
@@ -66,6 +68,8 @@
    - `socks5://` / `http://`（本地代理软件）
 
 订阅账号（Claude/Gemini/ChatGPT）也可以各自配置独立代理，不影响其他通道。
+
+**带认证的代理**：SOCKS5 与 HTTP 代理均支持账号密码认证——粘贴 `socks5://user:pass@host:port` 形态链接，或在面板里把「密码」字段填成 `用户名:密码`。路由会在 SOCKS5 握手中做 RFC 1929 用户名密码子协商、HTTP 代理带 `Proxy-Authorization` 头。注意 Windows 上 `npx`/`npm` 这类 `.cmd` 命令与认证代理无关，但带认证的节点链接里密码含特殊字符（`:` `/` `@`）时建议直接在面板分字段填写，链接形态会自动按 base64url 编码。
 
 ## 通道密钥池（同通道多 Key）
 
@@ -157,6 +161,47 @@ Content-Type: application/json
 
 「使用统计」页：最近 7/30 天的 Token 总量、调用次数、活跃天数、最常用模型、GitHub 风格活跃热力图、按天多模型堆叠柱状图、各模型消耗明细（含思考 token、缓存命中）。
 
+## 桌面端 MCP 插件管理（面板）
+
+设置页「桌面端 MCP 插件」卡片直接管理 Codex 桌面端的**官方插件机制**——`config.toml` 的 `[mcp_servers.*]` 段（插件由桌面端自己启动执行，对官方模型和路由模型都生效）：
+
+- **列表**：解析现有段（命令/参数/超时/env 子段/启停状态），含面板不认识的高级配置的段自动标记只读（防改写丢字段）。
+- **启停**：表格行内开关，写入官方 `enabled` 键——停用不删配置，桌面端重启后跳过加载。
+- **连接测试**：真实拉起插件（initialize + tools/list）并列出工具清单与耗时，支持「先测试再保存」。
+- **增删改**：表单填写命令/参数/启动超时/单次调用超时/工具白名单/环境变量；写入走 TOML 写前校验 + 自动备份，并与桌面端其他配置写入互斥。
+- **改完需重启桌面端生效**（面板上有重启按钮）；兼容 codex++ 生态插件的 MCP 部分（其 manifest 里的 MCP server 就是同一个 config.toml 段）。
+
+Windows 电脑操作场景推荐插件：`windows-computer-use`（提供 18 个电脑控制工具，任何模型都能操作本机应用）。官方自带电脑插件的 Mac 专属限制见 [README 常见问题](../README.md)。
+
+## 工具桥（路由内置工具，tools 段）
+
+网页池与不支持官方服务端工具的通道上，路由可以代为注入并执行工具（`config.json` 顶层 `tools` 段，改后重启路由生效）：
+
+```jsonc
+{
+  "tools": {
+    "webSearch": { "enabled": true, "provider": "duckduckgo", "maxResults": 5 },  // 联网搜索（duckduckgo 免 key / tavily 需 TAVILY_API_KEY）
+    "mcpServers": [ { "name": "my-tool", "command": "node", "args": ["server.js"], "env": { "K": "V" }, "enabled": true } ],  // 路由侧 MCP（stdio）
+    "skills": [ { "name": "my-skill", "content": "技能提示词/文档", "enabled": true } ],
+    "maxBridgeRounds": 8,        // 工具循环轮次上限（1..32，默认 8；耗尽时在回答里显式标注）
+    "webPoolInject": true        // 网页池电脑工具目录注入开关（CHATGPT_WEB_MCP_INJECT=0 可强制关）
+  }
+}
+```
+
+- 网页池会话自动注入 Windows 电脑控制工具目录（与桌面端 MCP 插件同源），工具结果回注自动做头尾截断，协议块解析对模型的常见格式偏差宽容，损坏块会计数并在响应中给出提示。
+- 路由侧 MCP server 空闲 5 分钟自动回收进程；单个 server 启动失败不影响其余工具。
+
+## 官方增量续聊（默认关闭）
+
+为节省官方 5 小时窗口额度，路由曾支持把同会话的全量重发改写为 `previous_response_id` 增量。**2026-09-12 起官方后端已移除该参数支持**（且强制 `store:false`），因此本功能默认关闭；开启后路由也会在连续被拒时自动熔断（本进程内停用，重启重新探测）：
+
+```jsonc
+{ "officialIncremental": { "enabled": true, "maxEntries": 256, "maxBytes": 67108864 } }
+```
+
+上游恢复支持后，显式设置 `enabled: true` 即可重新启用。关闭状态下功能不受影响，只是每轮全量发送（与官方直连行为一致）。
+
 ## 客户端 API 密钥（可选）
 
 在「API 密钥管理」创建 `sk-router-*` 密钥后，路由进入鉴权模式：客户端必须带 `Authorization: Bearer <Key>` 才能调用。密钥只存哈希，吊销立即生效。创建时还能一键把配置同步进 Codex（写入 `config.toml` + 系统环境变量）。不创建任何密钥 = 开放直连（适合本机独占场景）。
@@ -165,6 +210,7 @@ Content-Type: application/json
 
 - 调试日志：运行目录下 `router.log`（结构化 JSON）、`router-console.out.log`（进程控制台）。崩溃/启动失败先看 console 日志。
 - 优雅重启：面板顶栏；或 `scripts/restart-router.ps1`（Windows）/ `scripts/restart-router.sh`。重启会等旧进程排空在跑任务后再接管新进程。
+- 运维脚本在 Windows Git Bash 下也可用（`bash scripts/status-router.sh` / `stop-router.sh` / `restart-router.sh`，内部自动回退 netstat/PowerShell）；`stop-router.sh` 停止后会写维护标记，看门狗不会把人为停机当故障拉起，下次启动成功自动解除。
 - 管理 API 只接受本机回环 Host + 精确同源；CSP 允许同源脚本与样式，禁止第三方脚本注入。
 
 ## 反馈与交流
