@@ -65,6 +65,7 @@ import { createRouterHandler } from './lib/router-handler.mjs';
 import { createEnvKeySource } from './lib/env-key-source.mjs';
 import { readToolsConfig } from './lib/tool-bridge.mjs';
 import { createWebpoolMcpServer, readNativeToolsConfig } from './lib/webpool-mcp-server.mjs';
+import { createWebpoolTunnel } from './lib/webpool-tunnel.mjs';
 import {
   CU_SERVER_NAME, getWebpoolToolCatalogStatus, refreshWebpoolToolCatalog, resolveWebpoolMcpSpec,
 } from './lib/webpool-tool-catalog.mjs';
@@ -599,10 +600,31 @@ function refreshWebpoolCatalogSoon() {
     if (spec) refreshWebpoolToolCatalog(CU_SERVER_NAME, spec).catch(() => { /* 失败保留旧目录/镜像 */ });
   } catch { /* 目录刷新旁路，绝不打穿主路由 */ }
 }
+// 官方隧道客户端（P2）：仅门面在听且有凭据时真正运行；Bearer 文件写在用户目录
+// （LOCALAPPDATA\codex-router\tunnel），值本身只经 file: 头注入隧道子进程。
+let nativeBearerFile = '';
+function writeNativeBearerFile(bearer) {
+  if (!bearer) { nativeBearerFile = ''; return; }
+  try {
+    const dir = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.local', 'share'), 'codex-router', 'tunnel');
+    fs.mkdirSync(dir, { recursive: true });
+    nativeBearerFile = path.join(dir, 'mcp-bearer');
+    fs.writeFileSync(nativeBearerFile, bearer, { encoding: 'utf8' });
+  } catch { nativeBearerFile = ''; }
+}
+const webpoolTunnel = createWebpoolTunnel({
+  log: (event) => { try { flog(event); } catch { /* 诊断旁路 */ } },
+  getKey: (name) => envKeySource.getKey(name),
+  refreshKey: (name) => envKeySource.refreshNow(name),
+  getMcpPort: () => webpoolMcp.status().port || nativeToolsConfig.port,
+  getBearerFile: () => nativeBearerFile,
+  getProxyUrl: () => `http://${V2RAY_PROXY.host}:${V2RAY_PROXY.port}`,
+});
 const webpoolNative = {
   config: nativeToolsConfig,
   mcpStatus: () => webpoolMcp.status(),
   catalogStatus: () => getWebpoolToolCatalogStatus(),
+  tunnelStatus: () => webpoolTunnel.status(),
   /** 管理页自探：进程内直通门面的 JSON-RPC 链路（不发起任何网络请求，含回环）。 */
   async selfTest() {
     const st = webpoolMcp.status();
@@ -964,9 +986,12 @@ server.listen(PORT, '127.0.0.1', () => {
       port: nativeToolsConfig.port,
       bearerProvider: readNativeBearer,
       getNativeConfig: () => nativeToolsConfig,
-    }).then(() => {
+    }).then(async () => {
       const st = webpoolMcp.status();
       log(`  webpool native MCP facade: http://127.0.0.1:${st.port}/mcp (bearer ${st.bearerConfigured ? 'on' : 'off'})`);
+      // 官方隧道托管随门面就绪后启动（自身再按 nativeTools.tunnel.enabled 判定）
+      writeNativeBearerFile(await readNativeBearer());
+      webpoolTunnel.start(cfg);
     }).catch((error) => log(`webpool native 门面启动失败（不影响主路由）: ${error?.message || error}`));
   }
   // 工具目录单一事实源：文本协议注入或原生门面启用时才拉取（启动 3s 后首发 + 10min 周期）
@@ -989,7 +1014,8 @@ function gracefulExit(exitCode = 0) {
   try { server.closeIdleConnections(); } catch { /* 旧版 Node 无此方法 */ }
   try {
     server.close(async () => {
-      // 原生门面（独立回环监听器）先停：无排空语义需求，端口即刻释放
+      // 原生门面与隧道（独立监听器/子进程）先停：无排空语义需求，端口即刻释放
+      try { await webpoolTunnel.stop(); } catch { /* 旁路 */ }
       try { await webpoolMcp.stop(); } catch { /* 旁路 */ }
       try { await checkpointPersistence.close(); } catch (error) {
         log('checkpoint persistence close failed:', error.message);
