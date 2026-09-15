@@ -63,6 +63,11 @@ import { createOpenAiAuthManager } from './lib/openai-auth.mjs';
 import { createChatRequestBuilder } from './lib/chat-request.mjs';
 import { createRouterHandler } from './lib/router-handler.mjs';
 import { createEnvKeySource } from './lib/env-key-source.mjs';
+import { readToolsConfig } from './lib/tool-bridge.mjs';
+import { createWebpoolMcpServer, readNativeToolsConfig } from './lib/webpool-mcp-server.mjs';
+import {
+  CU_SERVER_NAME, getWebpoolToolCatalogStatus, refreshWebpoolToolCatalog, resolveWebpoolMcpSpec,
+} from './lib/webpool-tool-catalog.mjs';
 import { createAdminHandler } from './lib/admin-api.mjs';
 import { createChannelKeyPool } from './lib/channel-key-pool.mjs';
 import { readRevisionedJson } from './lib/json-file-store.mjs';
@@ -574,8 +579,50 @@ const apiKeyStore = createApiKeyStore({ db: getDatabase() });
 // 通道密钥池：同通道多账号 key（双形态/优先级），key 级冷却持久化；env_ref 经 envKeySource 热更新解析
 const keyPool = createChannelKeyPool({ db: getDatabase(), envKeySource, log });
 
+// ---------- 网页池原生 MCP 门面（治根改造 P1b，2026-09-14） ----------
+// config chatgptWeb.nativeTools.enabled=true 才启用（默认关——账号 §8 实弹与 Tunnel 凭据
+// 就绪前不自动暴露任何面）。门面仅绑 127.0.0.1；Bearer 凭据只从 env/注册表
+// （env-key-source）读取，源码零字面量。隧道客户端（P2）将连接本门面。
+const nativeToolsConfig = readNativeToolsConfig(cfg);
+const webpoolMcp = createWebpoolMcpServer({
+  log: (event) => { try { flog(event); } catch { /* 诊断旁路 */ } },
+  getToolsConfig: () => readToolsConfig(cfg),
+  version: ROUTER_VERSION,
+});
+async function readNativeBearer() {
+  try { await envKeySource.refreshNow(nativeToolsConfig.bearerKey); } catch { /* 注册表不可达：落回缓存/进程环境 */ }
+  return String(envKeySource.getKey(nativeToolsConfig.bearerKey) || '');
+}
+function refreshWebpoolCatalogSoon() {
+  try {
+    const spec = resolveWebpoolMcpSpec({ toolsConfig: readToolsConfig(cfg), codexHome: CODEX_HOME });
+    if (spec) refreshWebpoolToolCatalog(CU_SERVER_NAME, spec).catch(() => { /* 失败保留旧目录/镜像 */ });
+  } catch { /* 目录刷新旁路，绝不打穿主路由 */ }
+}
+const webpoolNative = {
+  config: nativeToolsConfig,
+  mcpStatus: () => webpoolMcp.status(),
+  catalogStatus: () => getWebpoolToolCatalogStatus(),
+  /** 管理页自探：进程内直通门面的 JSON-RPC 链路（不发起任何网络请求，含回环）。 */
+  async selfTest() {
+    const st = webpoolMcp.status();
+    if (!st.listening) return { ok: false, error: '门面未启动：需 chatgptWeb.nativeTools.enabled=true 并重启路由' };
+    const probed = await webpoolMcp.probe(() => nativeToolsConfig);
+    return {
+      ...probed,
+      port: st.port,
+      bearerConfigured: st.bearerConfigured,
+      bearerReady: Boolean(envKeySource.getKey(nativeToolsConfig.bearerKey)),
+      queueDepth: st.queueDepth,
+      calls: st.calls,
+      catalog: getWebpoolToolCatalogStatus(),
+    };
+  },
+};
+
 const adminHandler = createAdminHandler({
   requestLog,
+  webpoolNative,
   configPath: CONFIG_PATH,
   catalogPath: CATALOG_PATH,
   codexHome: CODEX_HOME,
@@ -912,6 +959,21 @@ server.listen(PORT, '127.0.0.1', () => {
   log(`  vision relay: ${VISION_RELAY.model} @ ${VISION_RELAY.host}`);
   log(`  image bridge: ${IMAGE_BRIDGE.enabled === false ? 'platform-key only' : `subscription @ ${IMAGE_BRIDGE.host}${IMAGE_BRIDGE.prefix}/responses (${IMAGE_BRIDGE.conversationModel})`}`);
   log(`  checkpoint persistence: ${checkpointPersistence.status().mode}`);
+  if (nativeToolsConfig.enabled) {
+    webpoolMcp.start({
+      port: nativeToolsConfig.port,
+      bearerProvider: readNativeBearer,
+      getNativeConfig: () => nativeToolsConfig,
+    }).then(() => {
+      const st = webpoolMcp.status();
+      log(`  webpool native MCP facade: http://127.0.0.1:${st.port}/mcp (bearer ${st.bearerConfigured ? 'on' : 'off'})`);
+    }).catch((error) => log(`webpool native 门面启动失败（不影响主路由）: ${error?.message || error}`));
+  }
+  // 工具目录单一事实源：文本协议注入或原生门面启用时才拉取（启动 3s 后首发 + 10min 周期）
+  if (readToolsConfig(cfg).webPoolInject || nativeToolsConfig.enabled) {
+    setTimeout(refreshWebpoolCatalogSoon, 3_000).unref?.();
+    setInterval(refreshWebpoolCatalogSoon, 10 * 60_000).unref?.();
+  }
 });
 
 // ---------- 无感更新：优雅退出 ----------
@@ -927,6 +989,8 @@ function gracefulExit(exitCode = 0) {
   try { server.closeIdleConnections(); } catch { /* 旧版 Node 无此方法 */ }
   try {
     server.close(async () => {
+      // 原生门面（独立回环监听器）先停：无排空语义需求，端口即刻释放
+      try { await webpoolMcp.stop(); } catch { /* 旁路 */ }
       try { await checkpointPersistence.close(); } catch (error) {
         log('checkpoint persistence close failed:', error.message);
       }
