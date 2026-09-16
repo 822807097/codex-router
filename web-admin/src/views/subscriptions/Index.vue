@@ -280,6 +280,9 @@
       </div>
       <div v-else class="empty-hint">{{ platform.emptyHint }}</div>
     </el-card>
+
+    <!-- 原生工具模式：状态总览 + 指标摘要 + 逐账号开关 + 三步设置向导 -->
+    <NativeToolsCard />
     </div>
     </AsyncContainer>
 
@@ -305,6 +308,7 @@ import { listAccounts, deleteAccount, fetchAccountModels, testAccountModel, setu
 import { ElMessage, ElMessageBox } from 'element-plus';
 import OAuthDialog from './components/OAuthDialog.vue';
 import WebAccountImportDialog from './components/WebAccountImportDialog.vue';
+import NativeToolsCard from './components/NativeToolsCard.vue';
 import AsyncContainer from '../../components/AsyncContainer.vue';
 
 const loading = ref(true);

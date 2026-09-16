@@ -75,6 +75,7 @@ import { readRevisionedJson } from './lib/json-file-store.mjs';
 import { inspectModelCatalog } from './lib/model-routing-plan.mjs';
 import { recoverModelRoutingTransaction } from './lib/model-routing-transaction.mjs';
 import { createDiagnosticLog } from './lib/diagnostic-log.mjs';
+import { createWebpoolMetrics } from './lib/webpool-metrics.mjs';
 import { createModelQuotaCooldownStore } from './lib/model-quota-cooldown.mjs';
 import { createTokenTracker } from './lib/token-tracker.mjs';
 import { createAuthManager } from './lib/auth/auth-manager.mjs';
@@ -214,13 +215,20 @@ const CONTEXT_LOG_FILE = process.env.ROUTER_CONTEXT_LOG || (parsedLogPath
     )
   : null);
 const contextDiagnosticLog = createDiagnosticLog({ filePath: CONTEXT_LOG_FILE });
-const flog = (event) => {
+// P5 原生模式指标：诊断事件先喂内存滑动聚合器（只读、异常全吞），再走原 flog——
+// 对日志链路零行为变化；实例经 createAdminHandler 传给管理端点 /_admin/api/webpool/metrics。
+const webpoolMetrics = createWebpoolMetrics();
+const baseFlog = (event) => {
   const eventName = event && typeof event === 'object' ? event.event : '';
   if (typeof eventName === 'string' && /^(?:context|history)\./.test(eventName)) {
     contextDiagnosticLog.write(event);
     return;
   }
   diagnosticLog.write(event);
+};
+const flog = (event) => {
+  try { webpoolMetrics.observe(event); } catch { /* 指标旁路绝不影响日志 */ }
+  baseFlog(event);
 };
 
 // ---------- 事件循环延迟探针（默认 5s，ROUTER_LAG_PROBE_MS=0 关闭） ----------
@@ -645,6 +653,7 @@ const webpoolNative = {
 const adminHandler = createAdminHandler({
   requestLog,
   webpoolNative,
+  webpoolMetrics,
   configPath: CONFIG_PATH,
   catalogPath: CATALOG_PATH,
   codexHome: CODEX_HOME,
