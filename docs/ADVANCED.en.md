@@ -191,6 +191,66 @@ On the web pool and channels without official server-side tools, the router can 
 - Web-pool sessions automatically inject the Windows computer-control tool catalog (same source as the desktop MCP plugin); injected tool results are head/tail truncated; protocol-block parsing tolerates common model format deviations; malformed blocks are counted and surfaced in the response.
 - Router-side MCP servers have their processes reaped after 5 minutes idle; one server failing to start doesn't affect the other tools.
 
+## Web-pool native tool mode (WebPool 2.0, experimental)
+
+Architecture in one line: **ChatGPT web connector → official secure MCP tunnel → local tunnel client (hosted automatically by the router) → router facade on 127.0.0.1 → the existing tool execution layer**. When enabled, web search / computer control for web-pool accounts no longer rely on text-protocol "translation" - they reach the web session as real tool calls through the official tunnel, and screenshots produced by tool runs are automatically re-injected into the conversation so the model can see what it did.
+
+> Who it's for: advanced users who want more reliable web search & computer control on web-pool models and don't mind a one-time manual setup. It only opens one extra local port (default 15731); the tunnel is a purely outbound connection - no inbound ports need to be opened anywhere.
+
+### Three steps to enable (the first two are manual)
+
+1. **Web app**: sign in to the ChatGPT web app → Settings → Developer mode, and create a connector pointing at the facade URL the router generates (the panel wizard shows the full URL).
+2. **Developer platform**: create a Tunnel and a Runtime Key on the platform backend (grant only Tunnels Read + Use), then put the Tunnel ID and the key into system environment variables (see the table below; on Windows use `setx`, then reopen your terminal).
+3. **Admin panel**: flip the native-tools switch on the subscriptions page's native card and click **"self-test"** to verify the path (it checks facade → tunnel → account in sequence). Restart the router when the panel prompts to apply.
+
+### Config keys (`chatgptWeb.nativeTools` in `config.json`)
+
+| Key | Purpose | Default |
+| --- | --- | --- |
+| `enabled` | Master switch for native tool mode | `false` |
+| `port` | Local facade listen port | `15731` |
+| `exposeComputer` | Expose the computer-control tools | `true` |
+| `exposeWebSearch` | Expose the web-search tool | `false` |
+| `bearerKey` | **Name of the environment variable** holding the facade Bearer secret (the value itself never goes into config) | `ROUTER_MCP_BEARER` |
+| `tunnel.enabled` | Host the official tunnel client (auto-download / start / supervise) | `false` |
+| `tunnel.channel` | Tunnel channel name | `main` |
+
+### Environment variables
+
+| Variable | Purpose | Notes |
+| --- | --- | --- |
+| `ROUTER_MCP_BEARER` | Bearer secret for the local facade | **fail-closed**: when unset, the facade refuses to listen (no naked port); the panel tells you to configure it first |
+| `CONTROL_PLANE_TUNNEL_ID` | Platform Tunnel ID | Format `tunnel_` + 32 hex chars; a malformed ID keeps the tunnel from starting |
+| `CONTROL_PLANE_API_KEY` | Platform Runtime Key | Grant only Tunnels Read + Use; env vars only, never written into config files |
+
+### Admin API (for the panel and scripts)
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /_admin/api/webpool/native-status` | Native-mode overview: global/per-account switches, facade & tunnel state, credential variable names (values never exposed) |
+| `GET /_admin/api/webpool/metrics` | Aggregated metrics: native / protocol / degraded / adjudicated / upload and facade call counters, bucketed by day |
+| `POST /_admin/api/webpool/native-selftest` | One-click self-test: checks facade → tunnel → account in sequence |
+| `POST /_admin/api/webpool/accounts/native-tools` | Per-account native-mode switch (writes account metadata and persists across restarts) |
+
+### Behavior semantics
+
+- **Per-account switches**: native mode is enabled per account and only applies to accounts explicitly switched on while the global switch is open; all other accounts keep using the text protocol.
+- **Automatic degradation**: when a native answer comes back empty or leaks "tool unavailable" style text, that session degrades back to the text protocol for **30 minutes** (native is retried automatically after the TTL); your task keeps running.
+- **Screenshot re-injection**: screenshots produced by tools like computer control are uploaded first, then re-injected into the session via the official image pointer; if the upload fails it falls back to a plain-text description instead of erroring out.
+- **Computer-control solo queue**: the desktop is a single resource, so computer tool calls are queued and executed one at a time (a timeout gives up without breaking mutual exclusion), preventing concurrent operations from stomping on each other.
+
+### Security boundaries
+
+- **Facade**: binds to the 127.0.0.1 loopback only; enforces a JSON content-type and rejects any request carrying an Origin header (browser CSRF defense); Bearer auth on top.
+- **Tunnel**: uses the official tunnel client with purely outbound connections; managed downloads go over HTTPS through a host allowlist with IP-literal rejection (loopback / private / reserved ranges all denied).
+- **Download verification**: the client archive is verified byte-for-byte against the official `SHA256SUMS.txt`; cache hits re-compute the hash and compare - any tampering refuses to execute.
+- **Log scrubbing**: the tunnel process's stderr output is scrubbed for secrets (Bearer values, platform keys, URL key segments, long base64 strings are uniformly redacted) before it reaches the logs.
+
+### Known limitations
+
+- Creating the web-app connector and obtaining Tunnel credentials **must be done manually** (the panel wizard only guides and validates; it cannot click for you).
+- The official roadmap for "full MCP write operations" is still evolving; write-tool capabilities for personal accounts are bounded by the official documentation and policies - beyond that boundary the router automatically falls back to the text protocol.
+
 ## Official incremental continuation (off by default)
 
 To save the official 5-hour window quota, the router used to rewrite full-session resends into `previous_response_id` increments. **Since 2026-09-12 the official backend no longer supports that parameter** (and forces `store:false`), so this feature is off by default; if enabled, the router auto-fuses after consecutive rejections (disabled for the process lifetime, re-probed on restart):
