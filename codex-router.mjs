@@ -596,6 +596,7 @@ const nativeToolsConfig = readNativeToolsConfig(cfg);
 const webpoolMcp = createWebpoolMcpServer({
   log: (event) => { try { flog(event); } catch { /* 诊断旁路 */ } },
   getToolsConfig: () => readToolsConfig(cfg),
+  getCodexHome: () => CODEX_HOME,
   version: ROUTER_VERSION,
 });
 async function readNativeBearer() {
