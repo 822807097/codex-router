@@ -189,7 +189,7 @@
         <template #title>接入失败：{{ activateError.message || '请求未完成，请重试' }}</template>
         <template #default>
           <template v-if="activateError.code === 'env_ref_missing'">
-            你选了「环境变量」模式：请先在系统里设置该环境变量（Windows 可用 setx 或系统设置），
+            你选了「环境变量」模式：请先在系统里设置该环境变量（Windows 可用 setx 或系统设置；macOS 可用 launchctl setenv（注意：注销/重启 macOS 后会失效）或写入 ~/.zshrc），
             或者改用直接粘贴 Key 的方式接入，二者效果相同。
           </template>
           <template v-else-if="activateError.code === 'revision_conflict'">

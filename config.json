@@ -133,25 +133,21 @@
       "wireApi": "chat"
     },
     {
-      "_comment": "智谱 GLM Coding Plan 订阅通道（周额度+5小时积分，GLM-5.3-Flash 等多模态支持图片；窗口实测 1M）：密钥设环境变量 ZHIPU_CODING_KEY 或在「通道密钥池」录入 target=zhipu-coding 后重启生效——开放平台同一把 key 走本通道（/api/coding/paas/v4）即计费到订阅套餐，走 /api/paas/v4 则计费到按量余额，务必保证本通道有密钥，否则请求会静默兜底到按量通道，余额不足时 429「余额不足或无可用资源包」；国内直连。自定义 slug 用 zhipu- 前缀（官方内置 GLM 模型按 slug 片段识别，含 GLM-5.3-Flash 片段的 slug 会被直连官方而 400）",
-      "match": "^glm|^GLM|^zhipu-",
-      "name": "zhipu-coding",
-      "platform": "zhipu",
+      "name": "zhipu-glm",
       "host": "open.bigmodel.cn",
       "prefix": "/api/coding/paas/v4",
-      "viaProxy": false,
-      "vision": true,
-      "envKey": "ZHIPU_CODING_KEY",
+      "protocol": "https",
       "wireApi": "chat",
-      "modelMap": {
-        "zhipu-flash-plan": "glm-5.3-flash",
-        "zhipu-plan": "glm-5.3"
-      },
+      "match": "^glm-|^(?:GLM-5\\.3|GLM-5\\.3-Flash|GLM-5\\.3-FlashX)$",
+      "viaProxy": false,
+      "proxyUrl": null,
+      "port": null,
+      "platform": "zhipu",
       "contextWindow": 1000000
     },
     {
       "_comment": "智谱开放平台按量 API 兜底通道：Coding Plan 密钥缺失或冷却时自动切换到这里；密钥设环境变量 ZHIPU_API_KEY（GLM-4/5 系均支持视觉）",
-      "match": "^glm|^GLM|^zhipu-",
+      "match": "^glm|^GLM|^zhipu-|^(?:GLM-5\\.3|GLM-5\\.3-Flash|GLM-5\\.3-FlashX)$",
       "name": "zhipu-api",
       "platform": "zhipu",
       "host": "open.bigmodel.cn",
@@ -428,6 +424,16 @@
       "wireApi": "chat",
       "upstreamModel": "gemini-3.7-flash-tiered",
       "viaProxy": true
+    },
+    {
+      "name": "deepseek",
+      "match": "^(?:deepseek-v4-flash|deepseek-v4-pro|deepseek-v4-flash-vision-exp)$",
+      "host": "api.deepseek.com",
+      "prefix": "/v1",
+      "protocol": "https",
+      "wireApi": "responses",
+      "viaProxy": false,
+      "proxyUrl": null
     }
   ],
   "supportsResponses": {
@@ -488,6 +494,15 @@
     {
       "_comment": "DeepSeek 预设推荐参数（接入时自动生成）",
       "match": "^deepseek-",
+      "contextWindow": 131072,
+      "maxOutputTokens": 8192,
+      "safetyRatio": 0.9,
+      "protocolReserveTokens": 1024,
+      "imageTokens": 2048
+    },
+    {
+      "_comment": "智谱 GLM（开放平台 API） 预设推荐参数（接入时自动生成）",
+      "match": "^glm-",
       "contextWindow": 131072,
       "maxOutputTokens": 8192,
       "safetyRatio": 0.9,

@@ -272,7 +272,7 @@ onMounted(() => loadAll());
           <ol class="wizard-ol">
             <li>打开 platform.openai.com，进入 Tunnels 页面，创建一个 Tunnel。</li>
             <li>生成一个 Runtime Key：<strong>只勾选 Tunnels Read 和 Tunnels Use 两项权限</strong>，其他权限一律不要勾。</li>
-            <li>按页面提示，把 <code class="wizard-code">CONTROL_PLANE_TUNNEL_ID</code> 和 <code class="wizard-code">CONTROL_PLANE_API_KEY</code> 写入系统环境变量（Windows：「系统属性 → 高级 → 环境变量」）。</li>
+            <li>按页面提示，把 <code class="wizard-code">CONTROL_PLANE_TUNNEL_ID</code> 和 <code class="wizard-code">CONTROL_PLANE_API_KEY</code> 写入系统环境变量（Windows：「系统属性 → 高级 → 环境变量」；macOS：<code class="wizard-code">launchctl setenv 变量名 值</code>，注意注销/重启 macOS 后会失效，长期使用请写入 LaunchAgent plist 或 ~/.zshrc）。</li>
             <li>再新增一个环境变量 <code class="wizard-code">{{ bearerKeyName }}</code>，值自己随便定一串长随机字符（相当于本机服务的门锁口令）。</li>
           </ol>
         </div>

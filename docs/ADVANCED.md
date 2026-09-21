@@ -130,7 +130,7 @@
   "host": "integrate.api.nvidia.com",
   "prefix": "/v1",
   "protocol": "https",
-  "envKey": "NVIDIA_API_KEY",                 // nvapi- 密钥，只放环境变量/注册表
+  "envKey": "NVIDIA_API_KEY",                 // nvapi- 密钥，只放环境变量（Windows 存注册表 / macOS 存 launchctl）
   "viaProxy": false                             // 国内网络若直连不通再改 true 走全局代理
 }
 ```
@@ -201,7 +201,7 @@ Windows 电脑操作场景推荐插件：`windows-computer-use`（提供 18 个�
 ### 启用三步（前两步是人工项）
 
 1. **网页端**：登录 ChatGPT 网页版 → 设置 → 开发者模式，创建一个连接器（Connector），远程 MCP 地址填路由生成的门面地址（面板向导会给出完整 URL）。
-2. **开发平台**：在平台后台创建一个 Tunnel 和一把 Runtime Key（权限只给 Tunnels Read + Use 即可），把 Tunnel ID 与 Key 写进系统环境变量（见下表；Windows 用 `setx`，写完重开终端）。
+2. **开发平台**：在平台后台创建一个 Tunnel 和一把 Runtime Key（权限只给 Tunnels Read + Use 即可），把 Tunnel ID 与 Key 写进系统环境变量（见下表；Windows 用 `setx`，写完重开终端；macOS 用 `launchctl setenv 变量名 值`，此后新拉起的进程可读到；注意 launchctl 环境不跨注销/重启，长期使用请写入 LaunchAgent plist 或 ~/.zshrc）。
 3. **管理面板**：平台订阅页的原生工具卡片里打开开关，点 **「自探」** 确认链路通（自探会依次检查门面、隧道、账号三段）。完成后按面板提示重启路由生效。
 
 ### 配置键（`config.json` 的 `chatgptWeb.nativeTools`）
@@ -250,6 +250,7 @@ Windows 电脑操作场景推荐插件：`windows-computer-use`（提供 18 个�
 ### 已知限制
 
 - 网页端连接器创建与 Tunnel 凭据申请**必须人工完成**（面板向导只负责指路与校验，不能代点）。
+- 原生模式的 18 个电脑操作工具依赖 Windows 版电脑控制桥；**macOS 目前可用面为联网搜索 + 剪贴板读写 + 全屏截图**（截图需授予屏幕录制权限）。另外 macOS 暂无 watchdog/开机自启实现（Windows 有计划任务看门狗与启动文件夹自启），mac 请用 `nohup`/LaunchAgent 自行守护。另注意：隧道客户端的控制面连接固定走 `config.json` 里配置的代理（`proxy` 段）——本机没有可用代理时隧道会一直重连失败，此时请关闭原生工具模式或调整代理配置。
 - 官方对「完整 MCP 写操作」的开放计划仍在演进，个人账号的写工具能力边界以官方文档与政策为准；超出边界时路由自动降级回文本协议兜底。
 
 ## 官方增量续聊（默认关闭）

@@ -18,15 +18,19 @@ BAK="$CFG.bak-$(date +%Y%m%d-%H%M%S)"
 cp "$CFG" "$BAK"
 echo "已备份：$BAK"
 
-# 移除 model_provider 和 model_catalog_json 行
-sed -i.bak '/^model_provider\s*=/d; /^model_catalog_json\s*=/d' "$CFG"
-
-# 移除 [model_providers.router] 段（从段头到下一个段头或文件尾）
+# 单趟 awk 完成清理（段感知，GNU/BSD awk 行为一致）：
+#   只剥顶层（首个段头之前）的 model_provider / model_catalog_json 行——项目级
+#   [projects.*] 里的同名键保留，与 JS 版（codex-desktop-config.mjs
+#   stripRouterDefaultToToml）语义一致；**保留 [model_providers.router] 段**——
+#   历史会话 rollout 元数据持久化了 model_provider:"router"，段被删旧对话打开时报
+#   「Model provider `router` not found」（审查 #23：此前脚本删段与 JS 行为相悖）。
+#   段头/键名锚点允许前导空白（与 JS filterTopLevelLines/isTomlSectionHeader 对齐，
+#   审查 #24/#27）；注意不能用 sed + \s（macOS BSD sed 把 \s 当字面 s，会静默删不掉）。
 awk '
-/^\[model_providers\.router\]/ { skip=1; next }
-/^\[/ { skip=0 }
-!skip { print }
-' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+    /^[[:space:]]*\[/ { intable = 1 }
+    !intable && (/^[[:space:]]*model_provider[[:space:]]*=/ || /^[[:space:]]*model_catalog_json[[:space:]]*=/) { next }
+    { print }
+' "$CFG" > "$CFG.tmp" && cat "$CFG.tmp" > "$CFG" && rm -f "$CFG.tmp"
 
 echo "config.toml 已恢复官方状态"
 

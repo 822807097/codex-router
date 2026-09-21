@@ -92,3 +92,4 @@ docs/plans/
 scripts/.watchdog-state
 scripts/.watchdog-maintenance
 .freeze-test/
+claude-desktop.json

@@ -364,7 +364,8 @@ async function handleSyncCodex(apiKey) {
   try {
     const res = await syncCodex(apiKey);
     if (res?.ok) {
-      ElMessage.success('Codex 配置与系统环境变量已成功同步！重启 Codex 即可生效。');
+      // 展示后端分平台消息：Windows=setx 持久；macOS=launchctl（不跨重启，含 ~/.zshrc 提醒）
+      ElMessage.success(res?.env || 'Codex 配置与系统环境变量已成功同步！重启 Codex 即可生效。');
     } else {
       ElMessage.error(res?.error?.message || '同步失败');
     }

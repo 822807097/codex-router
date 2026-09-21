@@ -47,7 +47,7 @@ fi
 deadline=$(( $(date +%s) + WAIT_SECONDS ))
 while port_listening "$PORT"; do
     if [ "$(date +%s)" -gt "$deadline" ]; then
-        echo "等待排空超时（${WAIT_SECONDS} 秒），端口仍被占用；请稍后重试或使用 restart-router.ps1" >&2
+        echo "等待排空超时（${WAIT_SECONDS} 秒），端口仍被占用；请稍后重试（Windows 可用 restart-router.ps1）" >&2
         exit 1
     fi
     sleep 1

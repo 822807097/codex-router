@@ -125,7 +125,7 @@
         </div>
         <div class="text-xs text-secondary leading-relaxed">
           「密钥环境变量」怎么填：先在系统里保存密钥（Windows 命令行执行
-          <code>setx 变量名 你的密钥</code>，如 <code>setx aliyun_video_key sk-xxx</code>），
+          <code>setx 变量名 你的密钥</code>，如 <code>setx aliyun_video_key sk-xxx</code>；macOS 执行 <code>launchctl setenv 变量名 你的密钥</code>），
           然后在这里填<b>变量名</b>（如 aliyun_video_key）。「测试」按钮会真实发一张图验证这个端点能不能用。
         </div>
       </div>
@@ -298,6 +298,141 @@
       </div>
     </el-card>
 
+    <!-- Claude Desktop 接入管理（Anthropic 网关模式） -->
+    <el-card shadow="never" class="setting-card">
+      <template #header>
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🟣</span>
+            <span class="font-bold text-primary text-sm">Claude Desktop 接入（Anthropic 网关）</span>
+            <el-tag v-if="claudeState.platform" size="small" effect="plain">{{ claudeState.platform }}</el-tag>
+            <el-tag v-if="claudeState.installed" size="small" type="success" effect="plain">v{{ claudeState.version }}</el-tag>
+            <el-tag size="small" :type="claudeState.gateway?.active ? 'success' : 'info'" effect="plain">
+              {{ claudeState.gateway?.active ? '已接入（近 24h 有流量）' : '未检测到流量' }}
+            </el-tag>
+            <el-tag size="small" :type="claudeState.running ? 'success' : 'warning'" effect="plain">
+              {{ claudeState.running ? '运行中' : '未运行' }}
+            </el-tag>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <el-button size="small" :loading="claudeLoading" @click="loadClaudeDesktopState">刷新状态</el-button>
+            <el-button size="small" type="primary" @click="openClaudeDialog">暴露模型与别名</el-button>
+            <el-button size="small" :loading="claudeTesting" @click="handleClaudeTest">连通性测试</el-button>
+            <el-button size="small" plain :loading="claudeRestarting" @click="handleClaudeRestart">重启 Claude 桌面端</el-button>
+          </div>
+        </div>
+      </template>
+
+      <div class="text-xs text-secondary leading-relaxed mb-3">
+        Claude Desktop 走 <b>Developer → Configure Third-Party Inference → Gateway</b>（Anthropic Messages 协议）接入本路由，
+        由路由的 Anthropic 兼容层转换到所有模型通道。Desktop 侧网关配置经系统加密存储、路由侧不可读写，
+        因此接入状态以<b>真实流量</b>为准（下方统计来自适配器）。模型在 Desktop 里显示为 claude-* 别名，
+        面板表格给出别名 ↔ 真实模型对照。
+        当前对 Desktop 暴露
+        <b class="text-primary">{{ claudeState.expose?.count ?? '—' }}</b>
+        个模型（{{ claudeState.expose?.mode === 'custom' ? '自定义白名单' : '全部目录模型' }}），点击「暴露模型与别名」可调整勾选与自定义别名，保存即时生效。
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <div class="border border-default rounded-lg p-3 bg-surface-2/40">
+          <div class="text-xs text-secondary mb-1">Gateway Base URL（Desktop 面板填写值）</div>
+          <div class="flex items-center gap-2">
+            <code class="text-xs font-mono text-primary truncate flex-1">{{ claudeGatewayUrl }}</code>
+            <el-button size="small" text type="primary" @click="copyClaudeText(claudeGatewayUrl)">复制</el-button>
+          </div>
+        </div>
+        <div class="border border-default rounded-lg p-3 bg-surface-2/40">
+          <div class="text-xs text-secondary mb-1">Gateway API Key（凭据类型选 Static API key）</div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <template v-if="claudeState.credentials?.openMode">
+              <code class="text-xs font-mono text-primary">local-claude</code>
+              <el-button size="small" text type="primary" @click="copyClaudeText('local-claude')">复制</el-button>
+              <span class="text-xs text-secondary">开放模式：任意 Key 可用</span>
+            </template>
+            <template v-else>
+              <el-button size="small" type="warning" plain :loading="claudeKeyCreating" @click="handleCreateClaudeKey">
+                创建 Desktop 专用 Key
+              </el-button>
+              <span class="text-xs text-secondary">路由已启用 API Key，Desktop 必须填真实 Key</span>
+            </template>
+          </div>
+          <div v-if="claudeKeyResult" class="mt-2 text-xs">
+            <span class="text-warning-text">Key 仅显示一次（client=claude-desktop），请立即粘贴到 Desktop：</span>
+            <div class="flex items-center gap-2 mt-1">
+              <code class="text-xs font-mono text-primary break-all">{{ claudeKeyResult }}</code>
+              <el-button size="small" text type="primary" @click="copyClaudeText(claudeKeyResult)">复制</el-button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3 text-xs">
+        <div class="border border-default rounded-lg p-2 bg-surface-2/40">
+          <div class="text-secondary">总请求数</div>
+          <div class="text-base font-bold text-primary">{{ claudeState.totals?.requests ?? 0 }}</div>
+        </div>
+        <div class="border border-default rounded-lg p-2 bg-surface-2/40">
+          <div class="text-secondary">错误数</div>
+          <div class="text-base font-bold" :class="(claudeState.totals?.errors ?? 0) > 0 ? 'text-danger' : 'text-primary'">{{ claudeState.totals?.errors ?? 0 }}</div>
+        </div>
+        <div class="border border-default rounded-lg p-2 bg-surface-2/40">
+          <div class="text-secondary">Tokens（入 / 出）</div>
+          <div class="text-base font-bold text-primary">{{ formatClaudeTokens(claudeState.totals?.inputTokens) }} / {{ formatClaudeTokens(claudeState.totals?.outputTokens) }}</div>
+        </div>
+        <div class="border border-default rounded-lg p-2 bg-surface-2/40">
+          <div class="text-secondary">最近请求</div>
+          <div class="text-base font-bold text-primary">{{ claudeState.gateway?.lastRequestAt ? formatClaudeTime(claudeState.gateway.lastRequestAt) : '—' }}</div>
+        </div>
+      </div>
+
+      <el-table :data="claudeModelRows" size="small" class="mb-3" max-height="260">
+        <el-table-column prop="alias" label="Desktop 别名" width="150">
+          <template #default="{ row }"><code class="text-xs">{{ row.alias }}</code></template>
+        </el-table-column>
+        <el-table-column prop="model" label="真实模型" min-width="150" />
+        <el-table-column label="上下文" width="110" align="right">
+          <template #default="{ row }">
+            <span v-if="row.maxInputTokens">{{ formatClaudeTokens(row.maxInputTokens) }}</span>
+            <span v-else class="text-secondary">—</span>
+            <el-tag v-if="row.supports1m" size="small" type="success" effect="plain" class="ml-1">1M</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="requests" label="请求" width="70" align="right" />
+        <el-table-column prop="errors" label="错误" width="70" align="right">
+          <template #default="{ row }">
+            <span :class="row.errors > 0 ? 'text-danger' : ''">{{ row.errors }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Tokens（入/出）" width="150" align="right">
+          <template #default="{ row }">{{ formatClaudeTokens(row.inputTokens) }} / {{ formatClaudeTokens(row.outputTokens) }}</template>
+        </el-table-column>
+        <el-table-column label="最近请求" width="120">
+          <template #default="{ row }">{{ row.lastRequestAt ? formatClaudeTime(row.lastRequestAt) : '—' }}</template>
+        </el-table-column>
+      </el-table>
+
+      <div v-if="claudeTestResult" class="text-xs mb-3">
+        <span v-if="claudeTestResult.ok" class="text-success">
+          探活成功：{{ claudeTestResult.latencyMs }}ms · {{ claudeTestResult.model }}（{{ claudeTestResult.alias }}） · stop_reason={{ claudeTestResult.stopReason }} · 回复「{{ claudeTestResult.snippet }}」
+        </span>
+        <span v-else class="text-danger break-all">探活失败：{{ claudeTestResult.error || ('HTTP ' + claudeTestResult.status) }}</span>
+      </div>
+
+      <el-collapse v-if="claudeState.recentEvents?.length" class="mb-2">
+        <el-collapse-item :title="`最近事件（${claudeState.recentEvents.length}）`" name="events">
+          <div class="text-xs font-mono space-y-1 max-h-48 overflow-y-auto">
+            <div v-for="(ev, idx) in claudeState.recentEvents" :key="idx" class="flex gap-2">
+              <span class="text-secondary shrink-0">{{ formatClaudeTime(ev.at) }}</span>
+              <span class="shrink-0">{{ ev.event.replace('anthropic.', '') }}</span>
+              <span class="text-secondary truncate">{{ ev.model }}{{ ev.stopReason ? ` · ${ev.stopReason}` : '' }}{{ ev.errorCode ? ` · ${ev.errorCode}` : '' }}{{ ev.latencyMs ? ` · ${ev.latencyMs}ms` : '' }}</span>
+            </div>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+
+      <div v-if="claudeState.gateway?.note" class="text-xs text-warning-text">{{ claudeState.gateway.note }}</div>
+    </el-card>
+
     <!-- 桌面端 MCP 插件管理（Codex 原生 [mcp_servers.*]） -->
     <el-card shadow="never" class="setting-card">
       <template #header>
@@ -392,8 +527,8 @@
         <el-form-item label="插件名（英文标识，如 my-tool）">
           <el-input v-model="mcpForm.name" :disabled="mcpEditing" placeholder="例如 filesystem / windows-computer-use" class="font-mono" />
         </el-form-item>
-        <el-form-item label="启动命令（可执行文件路径，如 node / npx / xxx.exe）">
-          <el-input v-model="mcpForm.command" placeholder="例如 B:\software\nodejs\node.exe 或 npx" class="font-mono" />
+        <el-form-item label="启动命令（可执行文件路径，如 node / npx / xxx.exe / /usr/bin/node）">
+          <el-input v-model="mcpForm.command" placeholder="Windows: node 或 B:\...\node.exe；macOS: /opt/homebrew/bin/npx" class="font-mono" />
         </el-form-item>
         <el-form-item label="启动参数（每行一个）">
           <el-input v-model="mcpForm.argsText" type="textarea" :rows="3" placeholder="例如（每行一个）：&#10;-y&#10;@upstash/context7-mcp" class="font-mono" />
@@ -464,6 +599,28 @@
           </template>
         </el-checkbox-group>
       </div>
+      <!-- 选中模型的上下文窗口：下拉预设可选，也可直接输入任意数值；留空=目录默认 -->
+      <div v-if="desktopSelectedModels.length" class="mt-3">
+        <div class="text-xs font-bold text-primary mb-1">选中模型的上下文窗口（tokens）——下拉可选，也可直接输入；留空 = 目录默认</div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1.5 max-h-44 overflow-y-auto border border-muted rounded-lg p-2">
+          <div v-for="slug in desktopSelectedModels" :key="slug" class="flex items-center gap-2 min-w-0">
+            <span class="text-xs text-secondary truncate flex-1" :title="slug">{{ slug }}</span>
+            <el-select
+              v-model="desktopContextEdits[slug]"
+              size="small"
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              :placeholder="desktopContextPlaceholder(slug)"
+              class="font-mono shrink-0"
+              style="width: 150px"
+            >
+              <el-option v-for="p in CONTEXT_PRESETS" :key="p.value" :value="p.value" :label="`${p.label} · ${p.value}`" />
+            </el-select>
+          </div>
+        </div>
+      </div>
       <el-form label-position="top" class="mt-3">
         <el-form-item label="默认启动模型">
           <el-select v-model="desktopDefaultModel" filterable style="width: 280px" placeholder="选择默认模型">
@@ -484,6 +641,111 @@
         </div>
         <el-button @click="desktopDialogOpen = false">取消</el-button>
         <el-button type="primary" :loading="desktopSaving" @click="applyDesktopRouter">应用并接入路由</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="claudeDialogOpen" title="Claude Desktop：暴露模型与别名" :width="isMobile ? '96%' : '1000px'" class="custom-dialog-pro" append-to-body>
+      <div class="text-xs text-secondary mb-2">
+        勾选要对 Claude Desktop 暴露的模型（未勾选的不会出现在 Desktop 模型列表）；自定义别名留空则使用
+        claude-&lt;8hex&gt; 默认派生。别名规则：claude- 开头、仅小写字母/数字、不带连字符，全局唯一。
+      </div>
+      <div class="flex items-center gap-3 mb-2">
+        <el-input
+          v-model="claudeSearch"
+          size="small"
+          clearable
+          placeholder="搜索模型名…"
+          style="width: 180px"
+        />
+        <el-button size="small" text type="primary" @click="claudeSelected = claudeState.catalog?.map((c) => c.model) || []">全选</el-button>
+        <el-button size="small" text type="primary" @click="claudeSelected = []">清空</el-button>
+        <span class="text-xs text-secondary">已选 {{ claudeSelected.length }} / {{ claudeState.catalog?.length || 0 }}</span>
+      </div>
+      <el-table
+        :data="claudeDialogRows"
+        size="small"
+        max-height="360"
+      >
+        <el-table-column width="52" align="center">
+          <template #header>
+            <el-checkbox
+              :model-value="claudeAllSelected"
+              :indeterminate="claudeSelected.length > 0 && !claudeAllSelected"
+              @update:model-value="toggleClaudeAll"
+            />
+          </template>
+          <template #default="{ row }">
+            <el-checkbox
+              :model-value="claudeSelected.includes(row.model)"
+              @update:model-value="toggleClaudeModel(row.model, $event)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="真实模型" min-width="210">
+          <template #default="{ row }">
+            <div class="text-sm leading-tight">{{ row.displayName || row.model }}</div>
+            <div class="text-xs text-secondary font-mono">{{ row.model }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="分组" width="110">
+          <template #default="{ row }">
+            <el-tag v-if="row.channel" size="small" effect="plain" class="font-mono">{{ row.channel }}</el-tag>
+            <span v-else class="text-xs text-secondary">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="当前别名（Desktop 显示）" min-width="170">
+          <template #default="{ row }"><code class="text-xs">{{ row.alias }}</code></template>
+        </el-table-column>
+        <el-table-column label="自定义别名（留空=默认）" min-width="170">
+          <template #default="{ row }">
+            <el-input
+              v-model="claudeAliasEdits[row.model]"
+              size="small"
+              placeholder="claude-xxx"
+              class="font-mono"
+              :disabled="!claudeSelected.includes(row.model)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="上下文窗口（tokens）——可选可填" min-width="150">
+          <template #default="{ row }">
+            <el-select
+              v-model="claudeContextEdits[row.model]"
+              size="small"
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              class="font-mono"
+              :disabled="!claudeSelected.includes(row.model)"
+              :placeholder="row.catalogContextWindow ? String(row.catalogContextWindow) : '自动'"
+            >
+              <el-option v-for="p in CONTEXT_PRESETS" :key="p.value" :value="p.value" :label="`${p.label} · ${p.value}`" />
+            </el-select>
+            <div v-if="claudeContextValue(row)" class="text-xs mt-0.5 text-secondary">{{ formatClaudeTokens(claudeContextValue(row)) }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="1M 变体" width="90" align="center">
+          <template #default="{ row }">
+            <el-tooltip content="开启：原值上报并声明 1M，Desktop 选择器会额外显示「xxx 1M」变体（同名两条）；关闭：单条目，上下文 ≥1M 时按 999,999 上报（Desktop 对 ≥100 万自动展开变体）" placement="top">
+              <el-switch
+                v-model="claudeSupports1mEdits[row.model]"
+                size="small"
+                :disabled="!claudeSelected.includes(row.model)"
+              />
+            </el-tooltip>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="claudeDialogOpen = false">取消</el-button>
+        <el-button
+          size="small"
+          text
+          type="warning"
+          @click="handleClaudeResetExpose"
+        >恢复全部模型+默认别名</el-button>
+        <el-button type="primary" :loading="claudeSaving" @click="saveClaudeExpose">保存（即时生效）</el-button>
       </template>
     </el-dialog>
 
@@ -533,6 +795,8 @@ import request from '../../api/request.js';
 import {
   getSystemConfig, saveSystemConfig, testVisionRelay, getCursorGatewayStatus, listCursorGatewayAccounts, addCursorGatewayAccount, removeCursorGatewayAccount, restartCursorGateway, startCursorGateway, stopCursorGateway, listCursorGatewayModels, restartCodexDesktopApp, syncCodexSessionProviders, getCodexDesktopState, restoreCodexDesktopOfficial, applyCodexDesktopRouter, checkForUpdate, applyUpdate, getModelContextDefaults, saveModelContextDefaults, getRouterStatus,
   listDesktopMcpServers, upsertDesktopMcpServer, deleteDesktopMcpServer, testDesktopMcpServer,
+  getClaudeDesktopState, testClaudeDesktop, restartClaudeDesktopApp, createClaudeDesktopKey,
+  setClaudeDesktopExpose, setClaudeDesktopAliases, setClaudeDesktopModelOptions,
 } from '../../api/system.js';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AsyncContainer from '../../components/AsyncContainer.vue';
@@ -1052,9 +1316,262 @@ onMounted(() => {
   loadDesktopState();
   loadCompactDefault();
   loadMcpServers();
+  loadClaudeDesktopState();
   // 真实版本号（此前写死 1.4.1 常年过期，与侧栏版本互相矛盾）
   loadCurrentVersion();
 });
+
+// ---- Claude Desktop 接入管理（Anthropic 网关模式） ----
+const claudeState = ref({});
+// 网关地址单一来源：模板展示与复制共用，避免端口调整只改一处（审查 #19）
+const claudeGatewayUrl = computed(() => claudeState.value.baseUrl || 'http://127.0.0.1:15730');
+const claudeLoading = ref(false);
+const claudeTesting = ref(false);
+const claudeRestarting = ref(false);
+const claudeTestResult = ref(null);
+const claudeKeyResult = ref('');
+const claudeKeyCreating = ref(false);
+
+// 别名全量列表 ⊕ 按真实模型聚合的用量（无流量的模型也显示，方便对照选择）
+const claudeModelRows = computed(() => {
+  const usage = new Map((claudeState.value.models || []).map((m) => [m.model, m]));
+  const aliases = claudeState.value.aliases || [];
+  const rows = aliases.map(({ alias, model, maxInputTokens, supports1m }) => {
+    const u = usage.get(model) || {};
+    return {
+      alias,
+      model,
+      maxInputTokens: maxInputTokens || null,
+      supports1m: supports1m === true,
+      requests: u.requests || 0,
+      errors: u.errors || 0,
+      inputTokens: u.inputTokens || 0,
+      outputTokens: u.outputTokens || 0,
+      lastRequestAt: u.lastRequestAt || 0,
+    };
+  });
+  // 有用量但已不在别名表（模型被删）的条目追加在末尾，数据不丢
+  for (const [model, u] of usage.entries()) {
+    if (!aliases.some((a) => a.model === model)) rows.push({ alias: '—', model, maxInputTokens: null, supports1m: false, ...u });
+  }
+  return rows;
+});
+
+function formatClaudeTokens(n) {
+  const value = Number(n) || 0;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(value);
+}
+
+function formatClaudeTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(Number(ts));
+  const pad = (x) => String(x).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+async function copyClaudeText(text) {
+  try {
+    await navigator.clipboard.writeText(String(text || ''));
+    ElMessage.success('已复制');
+  } catch {
+    ElMessage.error('复制失败，请手动选择文本复制');
+  }
+}
+
+async function loadClaudeDesktopState() {
+  claudeLoading.value = true;
+  try {
+    // 不再 skipGlobalError：静默失败会让面板展示上一次的旧状态（假在线），
+    // 失败必须由拦截器全局提示
+    const res = await getClaudeDesktopState();
+    claudeState.value = res || {};
+  } catch { /* 错误提示由请求拦截器统一处理 */ } finally {
+    claudeLoading.value = false;
+  }
+}
+
+async function handleClaudeTest() {
+  claudeTesting.value = true;
+  claudeTestResult.value = null;
+  try {
+    const res = await testClaudeDesktop({});
+    claudeTestResult.value = res?.result || { ok: false, error: '空响应' };
+  } catch (err) {
+    claudeTestResult.value = { ok: false, error: err.response?.data?.error?.message || err.message || '请求失败' };
+  } finally {
+    claudeTesting.value = false;
+  }
+}
+
+async function handleClaudeRestart() {
+  try {
+    await ElMessageBox.confirm(
+      '将完全退出并重新打开 Claude 桌面端（网关配置改动后需重启生效）。确认继续？',
+      '重启 Claude 桌面端',
+      { confirmButtonText: '重启', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  claudeRestarting.value = true;
+  try {
+    const res = await restartClaudeDesktopApp();
+    ElMessage.success(res?.message || 'Claude 桌面端已重启');
+    setTimeout(() => loadClaudeDesktopState(), 6000);
+  } catch { /* 错误提示由请求拦截器统一处理 */ } finally {
+    claudeRestarting.value = false;
+  }
+}
+
+async function handleCreateClaudeKey() {
+  claudeKeyCreating.value = true;
+  try {
+    const res = await createClaudeDesktopKey();
+    claudeKeyResult.value = res?.key || '';
+    if (claudeKeyResult.value) ElMessage.success('Key 已创建，仅本次显示，请立即复制到 Desktop');
+  } catch { /* 错误提示由请求拦截器统一处理 */ } finally {
+    claudeKeyCreating.value = false;
+  }
+}
+
+// ---- Claude Desktop 暴露模型与别名编辑 ----
+// CONTEXT_PRESETS 定义在 Codex 桌面端脚本块（两弹窗共用同一组预设）
+const claudeDialogOpen = ref(false);
+const claudeSaving = ref(false);
+const claudeSearch = ref('');
+const claudeSelected = ref([]);
+const claudeAliasEdits = reactive({});
+const claudeContextEdits = reactive({});
+const claudeSupports1mEdits = reactive({});
+
+const claudeDialogRows = computed(() => (claudeState.value.catalog || [])
+  .filter((entry) => !claudeSearch.value || entry.model.toLowerCase().includes(claudeSearch.value.toLowerCase())));
+
+const claudeAllSelected = computed(() => {
+  const rows = claudeDialogRows.value;
+  return rows.length > 0 && rows.every((row) => claudeSelected.value.includes(row.model));
+});
+
+function toggleClaudeModel(model, checked) {
+  const set = new Set(claudeSelected.value);
+  if (checked) set.add(model);
+  else set.delete(model);
+  claudeSelected.value = [...set];
+}
+
+function toggleClaudeAll(checked) {
+  // 与现有选集做并集/差集：搜索过滤态下全选/取消全选不得波及过滤范围外的行
+  //（审查 #20：整体替换会静默取消已勾选但不匹配当前搜索词的模型）
+  const visible = new Set(claudeDialogRows.value.map((row) => row.model));
+  if (checked) {
+    const merged = new Set([...claudeSelected.value, ...visible]);
+    claudeSelected.value = Array.from(merged);
+  } else {
+    claudeSelected.value = claudeSelected.value.filter((model) => !visible.has(model));
+  }
+}
+
+function openClaudeDialog() {
+  const catalog = claudeState.value.catalog || [];
+  if (!catalog.length) {
+    loadClaudeDesktopState().then(() => {
+      if (!(claudeState.value.catalog || []).length) {
+        ElMessage.error('桌面端状态加载失败，请先点击「刷新状态」后重试');
+        return;
+      }
+      openClaudeDialog();
+    });
+    return;
+  }
+  // 回填：勾选=当前白名单（全部暴露模式则全选）；别名/上下文输入=当前自定义值
+  const mode = claudeState.value.expose?.mode;
+  claudeSelected.value = mode === 'custom'
+    ? catalog.filter((c) => c.exposed).map((c) => c.model)
+    : catalog.map((c) => c.model);
+  for (const key of Object.keys(claudeAliasEdits)) delete claudeAliasEdits[key];
+  for (const key of Object.keys(claudeContextEdits)) delete claudeContextEdits[key];
+  for (const key of Object.keys(claudeSupports1mEdits)) delete claudeSupports1mEdits[key];
+  for (const entry of catalog) {
+    if (entry.customAlias) claudeAliasEdits[entry.model] = entry.customAlias;
+    if (entry.customMaxInputTokens) claudeContextEdits[entry.model] = String(entry.customMaxInputTokens);
+    claudeSupports1mEdits[entry.model] = entry.supports1m === true;
+  }
+  claudeDialogOpen.value = true;
+}
+
+// 该行生效的上下文窗口：用户填写 > 目录默认
+function claudeContextValue(row) {
+  const edited = Number(claudeContextEdits[row.model]);
+  if (Number.isFinite(edited) && edited > 0) return Math.floor(edited);
+  return row.maxInputTokens || row.catalogContextWindow || null;
+}
+
+async function saveClaudeExpose() {
+  if (!claudeSelected.value.length) {
+    ElMessage.warning('请至少勾选一个模型（或点「恢复全部模型+默认别名」）');
+    return;
+  }
+  // 未勾选的模型不再需要自定义别名/上下文/1M 变体覆盖
+  const aliases = {};
+  const options = {};
+  // 客户端预校验别名与服务端同一正则（claude- 前缀 + 小写字母/数字），
+  // 免得 3 段 POST 走到第二步才被 400 打断，留下半套已写入的配置
+  // 与服务端 claude-desktop-manager 的 ALIAS_RE 保持一致：官方角色 ID 族 + 哈希族
+  const aliasRe = /^(?:claude-(?:opus|sonnet|haiku|fable)(?:-[0-9]{1,4}){1,3}|claude-[a-z0-9]{1,40})$/;
+  const seenAliases = new Set();
+  for (const model of claudeSelected.value) {
+    const aliasValue = String(claudeAliasEdits[model] || '').trim();
+    if (aliasValue) {
+      if (!aliasRe.test(aliasValue)) {
+        ElMessage.warning(`别名 "${aliasValue}" 不合法：官方角色 ID（claude-opus-4-8 等）或 claude- 开头小写字母/数字`);
+        return;
+      }
+      if (seenAliases.has(aliasValue)) {
+        ElMessage.warning(`别名 "${aliasValue}" 重复：每个模型需要唯一别名`);
+        return;
+      }
+      seenAliases.add(aliasValue);
+      aliases[model] = aliasValue;
+    }
+    const entry = { supports1m: claudeSupports1mEdits[model] === true };
+    const contextValue = Number(claudeContextEdits[model]);
+    if (Number.isFinite(contextValue) && contextValue > 0) {
+      if (contextValue < 1000 || contextValue > 10000000) {
+        ElMessage.warning(`上下文长度需在 1k ~ 10M tokens 之间（当前 ${contextValue}）`);
+        return;
+      }
+      entry.maxInputTokens = Math.floor(contextValue);
+    }
+    options[model] = entry;
+  }
+  claudeSaving.value = true;
+  try {
+    await setClaudeDesktopExpose({ models: claudeSelected.value });
+    await setClaudeDesktopAliases({ aliases });
+    await setClaudeDesktopModelOptions({ options });
+    ElMessage.success('已保存，立即生效；Desktop 模型列表刷新（重开会话或重启 Desktop）后可见');
+    claudeDialogOpen.value = false;
+    await loadClaudeDesktopState();
+  } catch { /* 错误提示由请求拦截器统一处理 */ } finally {
+    claudeSaving.value = false;
+  }
+}
+
+async function handleClaudeResetExpose() {
+  claudeSaving.value = true;
+  try {
+    await setClaudeDesktopExpose({ models: null });
+    await setClaudeDesktopAliases({ aliases: {} });
+    await setClaudeDesktopModelOptions({ options: {} });
+    ElMessage.success('已恢复全部模型、默认别名与目录默认上下文');
+    claudeDialogOpen.value = false;
+    await loadClaudeDesktopState();
+  } catch { /* 错误提示由请求拦截器统一处理 */ } finally {
+    claudeSaving.value = false;
+  }
+}
 
 // ---- 桌面端 MCP 插件管理（Codex 原生 [mcp_servers.*]，2026-09-13） ----
 const mcpServers = ref([]);
@@ -1256,6 +1773,22 @@ const desktopDefaultModel = ref('');
 const desktopApiKeyAuth = ref(false);
 const desktopDialogOpen = ref(false);
 const desktopSearch = ref('');
+// 选中模型的上下文窗口覆盖（slug → tokens 字符串）；空 = 用目录默认
+const desktopContextEdits = reactive({});
+// 上下文预设：与 Claude Desktop 弹窗同一组（下拉可选 + 可自由输入）
+const CONTEXT_PRESETS = [
+  { value: '128000', label: '128k' },
+  { value: '200000', label: '200k' },
+  { value: '272000', label: '272k' },
+  { value: '400000', label: '400k' },
+  { value: '500000', label: '500k' },
+  { value: '1000000', label: '1M' },
+  { value: '2000000', label: '2M' },
+];
+function desktopContextPlaceholder(slug) {
+  const entry = (desktopState.models || []).find((m) => m.slug === slug);
+  return entry?.contextWindow ? String(entry.contextWindow) : '目录默认';
+}
 // 已加载 = models.desktop.json 里实际存在的模型（官方全量常驻，不计入）
 const loadedCount = computed(
   () => desktopState.models.filter((m) => m.loaded && !m.official).length,
@@ -1302,10 +1835,12 @@ function openDesktopRouterDialog() {
         ElMessage.error('桌面端状态加载失败，请先点击「刷新状态」后重试');
         return;
       }
-      desktopDialogOpen.value = true;
+      openDesktopRouterDialog();
     });
     return;
   }
+  // 清掉上次的上下文覆盖，避免陈旧值悄悄写入本次接入
+  for (const key of Object.keys(desktopContextEdits)) delete desktopContextEdits[key];
   desktopDialogOpen.value = true;
 }
 
@@ -1367,6 +1902,11 @@ async function applyDesktopRouter() {
       slugs,
       defaultModel: desktopDefaultModel.value,
       apiKeyAuth: desktopApiKeyAuth.value,
+      // 按模型覆盖上下文窗口：仅传用户显式设置且合法的值（>=1000），未设置的用目录默认
+      contextOverrides: Object.fromEntries(slugs
+        .map((slug) => [slug, Number(desktopContextEdits[slug])])
+        .filter(([, value]) => Number.isFinite(value) && value >= 1000)
+        .map(([slug, value]) => [slug, Math.floor(value)])),
     });
     clearInterval(stageTimer);
     desktopApplyStage.value = '接入成功，正在自动重启桌面端使配置生效…';

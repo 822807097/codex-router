@@ -1,0 +1,7 @@
+# 行尾规则：仓库与检出统一 LF。
+# 背景：Windows 开发机若开 core.autocrlf=true，pull/self-update(git reset --hard) 会把
+# 本批改动的 .sh 重写成 CRLF，macOS/Git Bash 下 bash 直接语法崩（路由会死在重启链里）。
+# 当前 index 里 sh/ps1/vbs 均为 LF，与下述规则一致，不会触发重整化churn。
+*.sh text eol=lf
+*.ps1 text eol=lf
+*.vbs text eol=lf

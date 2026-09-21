@@ -179,12 +179,12 @@
               v-model="form.key"
               :type="form.kind === 'plaintext' ? 'password' : 'text'"
               :show-password="form.kind === 'plaintext'"
-              :placeholder="form.kind === 'env_ref' ? '例如 DEEPSEEK_API_KEY_2（注册表/进程环境）' : 'sk-...'"
+              :placeholder="form.kind === 'env_ref' ? '例如 DEEPSEEK_API_KEY_2（环境变量，Windows 存注册表 / macOS 存 launchctl）' : 'sk-...'"
               class="font-mono"
             />
             <div v-if="form.kind === 'env_ref'" class="text-xs mt-1">
               <span class="text-secondary">
-                保存时后端会校验变量已设置（注册表/进程环境，改后无需重启路由）
+                保存时后端会校验变量已设置（环境变量，Windows 存注册表 / macOS 存 launchctl，改后无需重启路由）
               </span>
             </div>
             <div v-else-if="editingId" class="text-xs text-secondary mt-1">

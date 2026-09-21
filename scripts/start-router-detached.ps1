@@ -22,13 +22,13 @@ $router = Join-Path $scriptDir '..\codex-router.mjs'
 if (-not (Test-Path $router)) { $router = Join-Path $scriptDir 'codex-router.mjs' }
 if (-not (Test-Path $router)) { throw "找不到 codex-router.mjs" }
 
-# Node 版本预检（与 start-router.sh 同款：node:sqlite 需 v23.4+）
+# Node 版本预检（与 start-router.sh 同款：node:sqlite 需 v24+）
 $nodeVersion = ''
 try { $nodeVersion = (node -v).Trim() } catch { $nodeVersion = '' }
 $nodeMajor = 0
 if ($nodeVersion -match '^v?(\d+)\.') { $nodeMajor = [int]$Matches[1] }
-if ($nodeMajor -lt 23) {
-    throw "Node.js 版本过低（$nodeVersion）。需要 v23.4+（推荐 LTS v24）：https://nodejs.org"
+if ($nodeMajor -lt 24) {
+    throw "Node.js 版本过低（$nodeVersion）。需要 v24+（LTS）：https://nodejs.org"
 }
 
 # 环境注入：CODEX_HOME + 配置里引用的全部 envKey（User/Machine 双作用域补齐）

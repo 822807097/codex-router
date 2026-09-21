@@ -222,6 +222,69 @@ export function applyCodexDesktopRouter(data) {
   });
 }
 
+// ---------- Claude Desktop 接入管理（Anthropic 网关模式） ----------
+
+export function getClaudeDesktopState(config = {}) {
+  return request({
+    url: '/claude-desktop/state',
+    method: 'get',
+    ...config,
+  });
+}
+
+export function testClaudeDesktop(data, config = {}) {
+  return request({
+    url: '/claude-desktop/test',
+    method: 'post',
+    data,
+    // 探活走真实 /v1/messages 回环（含上游模型生成），放宽超时
+    timeout: 90_000,
+    ...config,
+  });
+}
+
+export function restartClaudeDesktopApp() {
+  return request({
+    url: '/claude-desktop/restart-app',
+    method: 'post',
+    timeout: 60_000,
+  });
+}
+
+export function createClaudeDesktopKey() {
+  return request({
+    url: '/claude-desktop/keys/create',
+    method: 'post',
+  });
+}
+
+/** 暴露模型白名单：models=null 恢复全部；数组=白名单 */
+export function setClaudeDesktopExpose(data) {
+  return request({
+    url: '/claude-desktop/expose',
+    method: 'post',
+    data,
+  });
+}
+
+/** 自定义别名：{ aliases: { 真实模型ID: 'claude-xxx' } }；空对象=全部恢复默认 */
+export function setClaudeDesktopAliases(data) {
+  return request({
+    url: '/claude-desktop/aliases',
+    method: 'post',
+    data,
+  });
+}
+
+/** 上下文/1M 变体：{ options: { 模型ID: { maxInputTokens?, supports1m? } } }；空条目=恢复目录默认 */
+export function setClaudeDesktopModelOptions(data) {
+  return request({
+    url: '/claude-desktop/model-options',
+    method: 'post',
+    data,
+  });
+}
+
 /** 检查开源仓库新版本（GitHub Releases 对比本地版本） */
 export function checkForUpdate(config = {}) {
   return request({

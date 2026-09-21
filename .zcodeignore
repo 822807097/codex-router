@@ -1,0 +1,125 @@
+# 依赖与日志
+node_modules/
+**/node_modules/
+.npm-cache*/
+*.log
+package-lock.json
+!web-admin/package-lock.json
+scripts/router.log
+
+# 用户数据（绝不含密钥/登录态/模型目录）
+credentials-vault.json
+config.json.model-routing*
+auth.json
+models.json
+*.bak*
+*.tmp
+
+# 编辑器
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# �ܹ��������ļ�
+.env
+
+# 浏览器验收临时目录
+.playwright-cli/
+
+# 本地验证产物（Playwright 截图/脚本/日志）
+output/
+
+# 第三方依赖目录：默认不入库；例外——Cursor 内置网关（cursor2api，MIT）源码
+# 必须随仓库分发，否则开源用户 clone 后找不到网关、功能不可用。
+external/*
+!external/cursor2api/
+# cursor2api 自身的运行产物/依赖不入库
+external/cursor2api/node_modules/
+external/cursor2api/dist/
+external/cursor2api/*.log
+external/cursor2api/*.db
+external/cursor2api/.env
+
+# 运行时数据库（SQLite：含账号凭据/API Key/通道密钥，绝不提交）
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 本地工具状态（Mimosa 扫描记录、WorkBuddy 会话等）
+.mimosa/
+.workbuddy/
+
+# 临时调试脚本与截图（本机排障产物，不入库）
+/capture_codex.ps1
+/enum_codex_windows.ps1
+/interact_codex.ps1
+/capture.ps1
+/check_admin.ps1
+/dump_*.ps1
+/dump_win32.ps1
+/find_config.ps1
+/get_proc.ps1
+/get_wmi.ps1
+/list_dir.ps1
+/restore_win.ps1
+/run*.sh
+/screen_*.png
+/step*.ps1
+/test_click.ps1
+/scripts/audit-scan-round.sh
+/scripts/run_screen.bat
+/scripts/take_screenshot.ps1
+
+# 私有部署脚本（含本机绝对路径，仅本人使用，不入库）
+/scripts/deploy-*.ps1
+
+# 内部计划/设计文档（upstream 私用，不入库）
+docs/superpowers/
+docs/plan-*.md
+
+# 测试套件（内部开发回归用，开源发布不含；本地保留）
+/test/
+/tmp-debug-body-*.json
+
+# 内部计划文档（upstream 私用，不入库）
+docs/plans/
+
+# 看门狗/调试运行时产物
+scripts/.watchdog-state
+scripts/.watchdog-maintenance
+.freeze-test/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

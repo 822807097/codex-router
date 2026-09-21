@@ -4,7 +4,7 @@
 
 **Local-First Multi-Model Router & Gateway**
 
-![License](https://img.shields.io/badge/license-MIT-green) ![Node](https://img.shields.io/badge/Node.js-23.4%2B-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green) ![Node](https://img.shields.io/badge/Node.js-24%2B-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
 [简体中文](./README.md) | **English**
 
@@ -94,7 +94,7 @@ When your ChatGPT subscription quota runs out, the task does not restart: pick a
 
 ## 2. Preparation (3 minutes)
 
-1. Install **Node.js v23.4 or newer** (the latest LTS v24 from [nodejs.org](https://nodejs.org), next-next-next is fine). The router relies on the built-in `node:sqlite` module (available by default since v23.4); older versions fail at startup — the launcher pre-checks and prints an upgrade hint.
+1. Install **Node.js v24 or newer** (the current LTS from [nodejs.org](https://nodejs.org), next-next-next is fine). The router relies on the built-in `node:sqlite` module; older versions fail at startup — the launcher pre-checks and prints an upgrade hint.
 2. Prepare **your own** vendor API keys (DeepSeek open platform, Alibaba Bailian, SiliconFlow, OpenRouter, …). This project ships **no built-in keys**.
 3. Download and extract this project's source to any directory, e.g. `D:\codex-router`.
 
@@ -140,7 +140,7 @@ If you'd rather add an arbitrary OpenAI-compatible model manually:
 - In **system & routing config → enabled target channels**, click "add channel": fill in the channel name, match regex (e.g. `^deepseek-`), host (e.g. `api.deepseek.com`), path prefix (usually `/v1`), and the key's env-var name.
 - On the model-groups page, click "add custom model" and map the model slug to that channel.
 
-> **Where do keys go?** This project insists "keys never live in config files". Put keys into **environment variables** (Windows: `setx VAR_NAME your_key`, e.g. `setx DEEPSEEK_API_KEY sk-xxx`) and reference only the variable name in the channel. Alternatively, paste plaintext keys into the panel's channel key pool — they are stored in the router's own local database, never written into `config.json`.
+> **Where do keys go?** This project insists "keys never live in config files". Put keys into **environment variables** (Windows: `setx VAR_NAME your_key`, e.g. `setx DEEPSEEK_API_KEY sk-xxx`; macOS: `launchctl setenv VAR_NAME your_key`, or just use the panel's "Sync to Codex" button) and reference only the variable name in the channel. Alternatively, paste plaintext keys into the panel's channel key pool — they are stored in the router's own local database, never written into `config.json`.
 
 ## 5. Connect your clients (Codex / Trae / Qoder / OpenCode)
 
@@ -217,7 +217,7 @@ See [docs/ADVANCED.en.md "network & proxy"](docs/ADVANCED.en.md). Per-channel pr
 Native tool mode is a second tool path for web-pool accounts: instead of the router "translating" tool calls into text prompts, web search and computer control reach the web session as real tool calls through the official connector + secure tunnel, and screenshots from tool runs can be fed back into the conversation. It requires two manual setup steps on your side (a connector on the web app + tunnel credentials on the developer platform), and write-tool capabilities for personal accounts are bounded by OpenAI's official policies — hence it ships disabled. Enabling takes three steps: 1) enable developer mode on the web app and create a connector; 2) create a Tunnel and a Runtime Key on the developer platform and put both credentials into system environment variables; 3) flip the native switch in the admin panel and run "self-test" to confirm the path. Full walkthrough in [docs/ADVANCED.en.md "Web-pool native tool mode"](docs/ADVANCED.en.md). The text-protocol path always remains as automatic fallback: when a native answer misbehaves, the router degrades that session back to the text protocol for 30 minutes, so your task keeps running.
 
 **Q: The desktop's official 🖥️ computer tool reports `apps=[]` / `cua.getApp is not a function`?**
-That is a **platform limitation of ChatGPT desktop's official computer plugin itself**: its app-level control APIs (listing apps, operating per-app) are officially implemented for macOS only - on Windows device discovery returns empty and those functions don't exist. This is unrelated to this project (that chain runs entirely inside the desktop app and never touches the router; the same happens on official direct connections). For full computer control on Windows use the desktop MCP plugin (e.g. the built-in `windows-computer-use` registration: 18 tools with per-app instructions, works with any model); on Windows the official plugin only offers browser control.
+That is a **platform limitation of ChatGPT desktop's official computer plugin itself**: its app-level control APIs (listing apps, operating per-app) are officially implemented for macOS only - on Windows device discovery returns empty and those functions don't exist. This is unrelated to this project (that chain runs entirely inside the desktop app and never touches the router; the same happens on official direct connections). For full computer control on Windows use the desktop MCP plugin (e.g. the built-in `windows-computer-use` registration: 18 tools with per-app instructions, works with any model); on Windows the official plugin only offers browser control. On macOS the official plugin's app-level control works natively, and the router's webpool native tools (clipboard read/write, full-screen capture) ship both platform implementations - `pbcopy`/`pbpaste`/`screencapture` on macOS (screen recording permission required for capture). Note the 18 computer-operation tools of native mode still rely on the Windows computer-use bridge; macOS native mode currently offers web search + clipboard + full-screen capture.
 
 ## 8. Security
 

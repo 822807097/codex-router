@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ============================================================================
-// codex-router.mjs — Codex 本地多模型路由代理（零依赖，Node >= 23.4：node:sqlite）
+// codex-router.mjs — Codex 本地多模型路由代理（零依赖，Node >= 24 LTS：node:sqlite）
 // ----------------------------------------------------------------------------
 // 解决什么问题：
 //   Codex 桌面端同一时间只能配置一个 model_provider，且「官方 GPT + 第三方模型」
@@ -65,11 +65,13 @@ import { createRouterHandler } from './lib/router-handler.mjs';
 import { createEnvKeySource } from './lib/env-key-source.mjs';
 import { readToolsConfig } from './lib/tool-bridge.mjs';
 import { createWebpoolMcpServer, readNativeToolsConfig } from './lib/webpool-mcp-server.mjs';
-import { createWebpoolTunnel } from './lib/webpool-tunnel.mjs';
+import { createWebpoolTunnel, defaultRouterDataRoot } from './lib/webpool-tunnel.mjs';
 import {
   CU_SERVER_NAME, getWebpoolToolCatalogStatus, refreshWebpoolToolCatalog, resolveWebpoolMcpSpec,
 } from './lib/webpool-tool-catalog.mjs';
 import { createAdminHandler } from './lib/admin-api.mjs';
+import { createAnthropicAdapter } from './lib/anthropic-adapter.mjs';
+import { createClaudeDesktopManager } from './lib/claude-desktop-manager.mjs';
 import { createChannelKeyPool } from './lib/channel-key-pool.mjs';
 import { readRevisionedJson } from './lib/json-file-store.mjs';
 import { inspectModelCatalog } from './lib/model-routing-plan.mjs';
@@ -600,7 +602,7 @@ const webpoolMcp = createWebpoolMcpServer({
   version: ROUTER_VERSION,
 });
 async function readNativeBearer() {
-  try { await envKeySource.refreshNow(nativeToolsConfig.bearerKey); } catch { /* 注册表不可达：落回缓存/进程环境 */ }
+  try { await envKeySource.refreshNow(nativeToolsConfig.bearerKey); } catch { /* 持久环境源不可达（win 注册表 / mac launchctl）：落回缓存/进程环境 */ }
   return String(envKeySource.getKey(nativeToolsConfig.bearerKey) || '');
 }
 function refreshWebpoolCatalogSoon() {
@@ -609,17 +611,22 @@ function refreshWebpoolCatalogSoon() {
     if (spec) refreshWebpoolToolCatalog(CU_SERVER_NAME, spec).catch(() => { /* 失败保留旧目录/镜像 */ });
   } catch { /* 目录刷新旁路，绝不打穿主路由 */ }
 }
-// 官方隧道客户端（P2）：仅门面在听且有凭据时真正运行；Bearer 文件写在用户目录
-// （LOCALAPPDATA\codex-router\tunnel），值本身只经 file: 头注入隧道子进程。
+// 官方隧道客户端（P2）：仅门面在听且有凭据时真正运行；Bearer 文件写在平台数据目录
+// （defaultRouterDataRoot()\tunnel），值本身只经 file: 头注入隧道子进程。
 let nativeBearerFile = '';
 function writeNativeBearerFile(bearer) {
   if (!bearer) { nativeBearerFile = ''; return; }
   try {
-    const dir = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), '.local', 'share'), 'codex-router', 'tunnel');
+    const dir = path.join(defaultRouterDataRoot(), 'tunnel');
     fs.mkdirSync(dir, { recursive: true });
     nativeBearerFile = path.join(dir, 'mcp-bearer');
-    fs.writeFileSync(nativeBearerFile, bearer, { encoding: 'utf8' });
-  } catch { nativeBearerFile = ''; }
+    fs.writeFileSync(nativeBearerFile, bearer, { encoding: 'utf8', mode: 0o600 });
+  } catch { nativeBearerFile = ''; return; }
+  // mode 只在创建时生效；旧版本可能留下 0644 文件，写后收紧一次。收紧失败不回滚
+  // 路径：凭据已落盘，清空路径只会让隧道静默失能且无法自愈（审查 #1 分级处理）
+  try {
+    fs.chmodSync(nativeBearerFile, 0o600);
+  } catch { /* 权限收紧失败不影响已落盘凭据 */ }
 }
 const webpoolTunnel = createWebpoolTunnel({
   log: (event) => { try { flog(event); } catch { /* 诊断旁路 */ } },
@@ -631,13 +638,16 @@ const webpoolTunnel = createWebpoolTunnel({
 });
 const webpoolNative = {
   config: nativeToolsConfig,
+  startError: '', // 门面 start() 的失败原因（REFUSED_NO_BEARER 等），供管理页自探带出
   mcpStatus: () => webpoolMcp.status(),
   catalogStatus: () => getWebpoolToolCatalogStatus(),
   tunnelStatus: () => webpoolTunnel.status(),
   /** 管理页自探：进程内直通门面的 JSON-RPC 链路（不发起任何网络请求，含回环）。 */
   async selfTest() {
     const st = webpoolMcp.status();
-    if (!st.listening) return { ok: false, error: '门面未启动：需 chatgptWeb.nativeTools.enabled=true 并重启路由' };
+    // listening=false 时带出门面真实启动失败原因（如 REFUSED_NO_BEARER），否则面板只会看到
+    // 「未启动」静态提示，用户明明已开开关并重启（真实原因只在 router.log 里）
+    if (!st.listening) return { ok: false, error: webpoolNative.startError || '门面未启动：需 chatgptWeb.nativeTools.enabled=true 并重启路由' };
     const probed = await webpoolMcp.probe(() => nativeToolsConfig);
     return {
       ...probed,
@@ -651,8 +661,47 @@ const webpoolNative = {
   },
 };
 
+// ---------- Claude Desktop 接入管理（面板「Claude Desktop」卡片后端） ----------
+// Desktop 网关配置经 safeStorage 加密（路由侧不可读写），接入状态以适配器真实
+// 流量为准；管理器消费 anthropic.* 事件做用量统计/最近事件/按模型明细。
+// 暴露模型白名单与自定义别名持久化在 claude-desktop.json，保存即生效。
+// 模型清单实时读目录文件（mtime 缓存）：面板新增分组/模型保存后弹窗立即可见，
+// 不再要求重启路由（此前用启动快照，新分组勾选不了——2026-09-20 用户实测）。
+let liveCatalogCache = { mtimeMs: -1, models: null };
+const readLiveCatalogModels = () => {
+  try {
+    const mtimeMs = fs.statSync(CATALOG_PATH).mtimeMs;
+    if (mtimeMs !== liveCatalogCache.mtimeMs) {
+      const catalog = readModelCatalogFile(CATALOG_PATH, { maxBytes: MAX_CATALOG_BYTES });
+      liveCatalogCache = { mtimeMs, models: Array.isArray(catalog.models) ? catalog.models : [] };
+    }
+  } catch { /* 文件暂不可读时用上一次缓存；从未读过则退回启动快照 */ }
+  return liveCatalogCache.models || (Array.isArray(activeCatalog?.models) ? activeCatalog.models : []);
+};
+
+// 目录条目实时归一（slug/id 优先级单点维护），id 清单从同一份 entries 派生
+const claudeCatalogEntries = () => readLiveCatalogModels()
+  .map((entry) => ({
+    id: entry?.slug || entry?.id,
+    contextWindow: Number(entry?.context_window) > 0 ? Math.floor(Number(entry.context_window)) : null,
+  }))
+  .filter((entry) => typeof entry.id === 'string' && entry.id);
+
+const claudeDesktopManager = createClaudeDesktopManager({
+  port: PORT,
+  apiKeyStore,
+  // 条目携带 context_window（deepseek 系 1M / gpt 系 272k 等），作为
+  // Desktop 上下文计量与 1M 变体判定的默认值
+  getCatalogEntries: claudeCatalogEntries,
+  getCatalogModelIds: () => claudeCatalogEntries().map((entry) => entry.id),
+  storePath: path.join(path.dirname(CONFIG_PATH), 'claude-desktop.json'),
+  log,
+  flog,
+});
+
 const adminHandler = createAdminHandler({
   requestLog,
+  claudeDesktop: claudeDesktopManager,
   webpoolNative,
   webpoolMetrics,
   configPath: CONFIG_PATH,
@@ -675,6 +724,8 @@ const adminHandler = createAdminHandler({
   oauthProxy: V2RAY_PROXY,
   // 通道模型列表拉取与路由请求共用 envKey 热更新源（注册表轮换后无需重启即可拉取）
   getKey: getEnvKey,
+  // 面板保存 env_ref 前热刷持久环境源（win 注册表 / mac launchctl），setx/launchctl setenv 后无需重启
+  refreshEnvKey: (name) => envKeySource.refreshNow(name),
   // 通道密钥池（管理端点与路由请求共用同一实例）
   keyPool,
   // 官方登录态通道的连通性测试：用已绑定账号的 token（含额度计数）
@@ -756,6 +807,39 @@ try {
   process.stderr.write('[catalog] 模型目录启动快照失败（catalog_snapshot_invalid）\n');
   process.exit(1);
 }
+// ---------- Anthropic Messages 兼容层（Claude Desktop Gateway 接入） ----------
+// POST /v1/messages → 转 chat completions 后经 127.0.0.1 回环走既有 routerHandler
+// 全管线（分流/鉴权/故障转移/协议桥接），响应反向转回 Anthropic JSON/SSE。
+// 模型别名（claude-<8hex>）仅用于对 Claude Desktop 暴露（新版会拒第三方关键词模型
+// ID），进入路由前映射回真实模型；/v1/chat/completions、/v1/responses、/v1/models
+// 的 OpenAI 语义不受影响。
+const anthropicAdapter = createAnthropicAdapter({
+  port: PORT,
+  apiKeyStore,
+  // 别名表来自管理器（暴露模型白名单 + 自定义别名），每次请求实时读取，保存即生效
+  getAliasEntries: () => claudeDesktopManager.aliasEntries(),
+  // 调试日志用：主候选目标名（实际故障转移见 anthropic.response/flog 事件）
+  describeRoute: (model) => {
+    try {
+      return providerPool.candidates(String(model || ''), []).map((target) => target?.name || '?');
+    } catch {
+      return [];
+    }
+  },
+  maxRequestBytes: MAX_REQUEST_BYTES,
+  startedAt: ROUTER_STARTED_AT,
+  log,
+  // 适配器事件喂 Claude Desktop 管理器（流量感知），再走原 flog 链
+  flog: (event) => {
+    try {
+      if (event && typeof event.event === 'string' && event.event.startsWith('anthropic.')) {
+        claudeDesktopManager.observe(event);
+      }
+    } catch { /* 统计旁路绝不影响路由 */ }
+    flog(event);
+  },
+});
+
 // 请求级异常收敛（2026-09-07 并发韧性修复）：把分发与处理异常变成单请求
 // 502/断流，绝不升级成进程熔断——一次坏请求只影响自己，其余并发对话照常。
 function failRequestResponse(clientRes, error, stage) {
@@ -791,10 +875,19 @@ server = http.createServer((clientReq, clientRes) => {
         .catch((error) => failRequestResponse(clientRes, error, 'image bridge error:'));
       return;
     }
-    // routerHandler 是 async：逃逸异常只以 promise rejection 出现，不 .catch
-    // 会直达 unhandledRejection 熔断计数，而非单请求 502（对抗审查 P1-2）。
-    routerHandler(clientReq, clientRes)
-      .catch((error) => failRequestResponse(clientRes, error, 'request dispatch error:'));
+    // Anthropic Messages 兼容层（Claude Desktop Gateway）：命中 /v1/messages 等
+    // 路径时完整接管；其余请求原样进入既有代理路由，OpenAI 语义零影响。
+    // server 回调非 async：两条异步链各自收敛异常，逃逸拒绝绝不进熔断计数。
+    Promise.resolve()
+      .then(() => anthropicAdapter(clientReq, clientRes))
+      .then((handled) => {
+        if (handled) return undefined;
+        // routerHandler 是 async：逃逸异常只以 promise rejection 出现，不 .catch
+        // 会直达 unhandledRejection 熔断计数，而非单请求 502（对抗审查 P1-2）。
+        return routerHandler(clientReq, clientRes)
+          .catch((error) => failRequestResponse(clientRes, error, 'request dispatch error:'));
+      })
+      .catch((error) => failRequestResponse(clientRes, error, 'anthropic adapter error:'));
   } catch (error) {
     failRequestResponse(clientRes, error, 'request dispatch error:');
   }
@@ -1002,7 +1095,10 @@ server.listen(PORT, '127.0.0.1', () => {
       // 官方隧道托管随门面就绪后启动（自身再按 nativeTools.tunnel.enabled 判定）
       writeNativeBearerFile(await readNativeBearer());
       webpoolTunnel.start(cfg);
-    }).catch((error) => log(`webpool native 门面启动失败（不影响主路由）: ${error?.message || error}`));
+    }).catch((error) => {
+      webpoolNative.startError = `门面启动失败：${String(error?.message || error).slice(0, 200)}`;
+      log(`webpool native 门面启动失败（不影响主路由）: ${error?.message || error}`);
+    });
   }
   // 工具目录单一事实源：文本协议注入或原生门面启用时才拉取（启动 3s 后首发 + 10min 周期）
   if (readToolsConfig(cfg).webPoolInject || nativeToolsConfig.enabled) {

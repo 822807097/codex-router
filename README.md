@@ -4,7 +4,7 @@
 
 **本地多模型路由代理 · Local-First Multi-Model Router & Gateway**
 
-![License](https://img.shields.io/badge/license-MIT-green) ![Node](https://img.shields.io/badge/Node.js-23.4%2B-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green) ![Node](https://img.shields.io/badge/Node.js-24%2B-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
 **简体中文** | [English](./README.en.md)
 
@@ -96,7 +96,7 @@ ChatGPT 官方订阅额度耗尽时，任务不需要重来：在同一个会话
 
 ## 二、准备工作（3 分钟）
 
-1. 安装 **Node.js v23.4 或更高版本**（推荐 [nodejs.org](https://nodejs.org) 的最新 LTS v24，一路下一步即可）。路由依赖 Node 内置 `node:sqlite` 模块（v23.4 起默认可用），旧版启动会直接报错——启动脚本会前置检查并给出升级提示。
+1. 安装 **Node.js v24 或更高版本**（[nodejs.org](https://nodejs.org) 的最新 LTS，一路下一步即可）。路由依赖 Node 内置 `node:sqlite` 模块，旧版启动会直接报错——启动脚本会前置检查并给出升级提示。
 2. 准备你**自己的**模型服务商 API Key（例如 DeepSeek 开放平台、阿里云百炼、硅基流动、OpenRouter 等）。本项目**自身不含任何内置密钥**。
 3. 下载并解压本项目源码到任意目录，例如 `D:\codex-router`。
 
@@ -146,7 +146,7 @@ http://127.0.0.1:15730/admin
 - 在 **「系统与路由配置」→ 已启用的路由目标通道** 点「添加通道」：填通道名称、匹配正则（例如 `^deepseek-`）、服务器地址（例如 `api.deepseek.com`）、路径前缀（通常 `/v1`）、密钥环境变量名。
 - 在 **「分组自定义模型」** 页点「添加自定义模型」，把模型 Slug 和它要走的通道对上。
 
-> **密钥怎么填：** 本项目坚持「密钥不进配置文件」。请把密钥放进**环境变量**（Windows 命令行执行 `setx 变量名 你的密钥`，例如 `setx DEEPSEEK_API_KEY sk-xxx`），然后在通道里只填**变量名**。管理面板里的「通道密钥池」也可以直接填明文 Key，它存在路由自己的本地数据库里，不会写进 `config.json`。
+> **密钥怎么填：** 本项目坚持「密钥不进配置文件」。请把密钥放进**环境变量**（Windows 命令行执行 `setx 变量名 你的密钥`，例如 `setx DEEPSEEK_API_KEY sk-xxx`；macOS 执行 `launchctl setenv 变量名 你的密钥`，或直接用管理面板「同步到 Codex」按钮），然后在通道里只填**变量名**。管理面板里的「通道密钥池」也可以直接填明文 Key，它存在路由自己的本地数据库里，不会写进 `config.json`。
 
 ## 五、让客户端连上来（Codex / Trae / Qoder / OpenCode）
 
@@ -231,7 +231,7 @@ http://127.0.0.1:15730/admin
 原生工具模式是网页池账号的另一条工具链路：不再由路由把工具调用「翻译」进文本提示词，而是走官方连接器 + 安全隧道，让联网搜索、电脑操作以真·工具调用直达网页会话，还支持把工具过程里的截图回传进对话。它依赖你在网页端和开发者平台完成两处人工配置（连接器 + 隧道凭据），且个人账号的写工具能力边界以 OpenAI 官方政策为准，所以默认关闭。想启用只需三步：① 网页端开启开发者模式并创建连接器；② 到开发平台建一个 Tunnel 和 Runtime Key，把两个凭据写进系统环境变量；③ 管理面板开启原生开关并点「自探」确认链路通。详细步骤见 [docs/ADVANCED.md「网页池原生工具模式」](docs/ADVANCED.md)。无论何时，原有的文本协议链路都始终自动兜底：原生回答异常时路由自动降级回文本协议 30 分钟，不影响任务继续跑。
 
 **Q：桌面端里官方的 🖥️ 电脑操作报 `apps=[]` / `cua.getApp is not a function`？**
-这是 ChatGPT 桌面端官方电脑插件自身的**平台限制**：它的应用级控制 API（列出应用、按应用操作）官方只做了 macOS，Windows 上设备发现为空、相关函数不存在——与本项目无关（该链路完全在桌面端本地，不经过路由，官方直连下同样如此）。Windows 上的完整电脑操作请使用桌面端 MCP 插件（如已内置注册的 `windows-computer-use`，支持全部 18 个工具与应用操作指引，任何模型都能用）；官方电脑插件在 Windows 上可用的部分仅有浏览器控制。
+这是 ChatGPT 桌面端官方电脑插件自身的**平台限制**：它的应用级控制 API（列出应用、按应用操作）官方只做了 macOS，Windows 上设备发现为空、相关函数不存在——与本项目无关（该链路完全在桌面端本地，不经过路由，官方直连下同样如此）。Windows 上的完整电脑操作请使用桌面端 MCP 插件（如已内置注册的 `windows-computer-use`，支持全部 18 个工具与应用操作指引，任何模型都能用）；官方电脑插件在 Windows 上可用的部分仅有浏览器控制。macOS 上官方插件的应用级控制原生可用；路由网页池的原生工具（剪贴板读写、全屏截图）也已内置双平台实现——macOS 走 `pbcopy`/`pbpaste`/`screencapture`（截图需授予屏幕录制权限）。注意原生模式的 18 个电脑操作工具仍依赖 Windows 版电脑控制桥，macOS 原生模式目前提供联网搜索 + 剪贴板 + 全屏截图。
 
 ## 八、安全说明
 

@@ -129,7 +129,7 @@ When a text-only model receives an image, the image first goes to a vision model
   "host": "integrate.api.nvidia.com",
   "prefix": "/v1",
   "protocol": "https",
-  "envKey": "NVIDIA_API_KEY",                 // nvapi- key, keep it in env vars / registry only
+  "envKey": "NVIDIA_API_KEY",                 // nvapi- key, keep it in env vars only (Windows registry / macOS launchctl)
   "viaProxy": false                           // if direct connection fails in some regions, set true to use the global proxy
 }
 ```
@@ -200,7 +200,7 @@ Architecture in one line: **ChatGPT web connector → official secure MCP tunnel
 ### Three steps to enable (the first two are manual)
 
 1. **Web app**: sign in to the ChatGPT web app → Settings → Developer mode, and create a connector pointing at the facade URL the router generates (the panel wizard shows the full URL).
-2. **Developer platform**: create a Tunnel and a Runtime Key on the platform backend (grant only Tunnels Read + Use), then put the Tunnel ID and the key into system environment variables (see the table below; on Windows use `setx`, then reopen your terminal).
+2. **Developer platform**: create a Tunnel and a Runtime Key on the platform backend (grant only Tunnels Read + Use), then put the Tunnel ID and the key into system environment variables (see the table below; on Windows use `setx`, then reopen your terminal; on macOS use `launchctl setenv VAR value` - newly launched processes will see it; note launchctl env does not survive logout/reboot, for long-term use put it in a LaunchAgent plist or ~/.zshrc).
 3. **Admin panel**: flip the native-tools switch on the subscriptions page's native card and click **"self-test"** to verify the path (it checks facade → tunnel → account in sequence). Restart the router when the panel prompts to apply.
 
 ### Config keys (`chatgptWeb.nativeTools` in `config.json`)
@@ -249,6 +249,7 @@ Architecture in one line: **ChatGPT web connector → official secure MCP tunnel
 ### Known limitations
 
 - Creating the web-app connector and obtaining Tunnel credentials **must be done manually** (the panel wizard only guides and validates; it cannot click for you).
+- The 18 computer-operation tools of native mode rely on the Windows computer-use bridge; **on macOS the available surface is web search + clipboard read/write + full-screen capture** (capture requires Screen Recording permission). macOS also has no watchdog/auto-start implementation yet (Windows ships a scheduled-task watchdog and Startup-folder shortcut) - on macOS, keep the router alive with `nohup` or a LaunchAgent. Also note: the tunnel client always reaches its control plane through the proxy configured in `config.json` (`proxy` section) - without a working local proxy the tunnel keeps reconnect-failing; disable native-tools mode or adjust the proxy in that case.
 - The official roadmap for "full MCP write operations" is still evolving; write-tool capabilities for personal accounts are bounded by the official documentation and policies - beyond that boundary the router automatically falls back to the text protocol.
 
 ## Official incremental continuation (off by default)

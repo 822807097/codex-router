@@ -56,7 +56,7 @@
         <el-form-item label="密钥环境变量（可选）">
           <el-input v-model="form.envKey" placeholder="例如 DEEPSEEK_API_KEY" class="font-mono" />
           <div class="text-xs text-secondary mt-1">
-            先在系统里设置好密钥环境变量（Windows：<code>setx 变量名 密钥</code>），这里填<b>变量名</b>；
+            先在系统里设置好密钥环境变量（Windows：<code>setx 变量名 密钥</code>；macOS：<code>launchctl setenv 变量名 密钥</code>（注销/重启 macOS 后会失效，长期使用请写进 ~/.zshrc）），这里填<b>变量名</b>；
             不想折腾环境变量，可以在「模型页 → 密钥池」里直接填写 Key，本项留空即可
           </div>
         </el-form-item>
