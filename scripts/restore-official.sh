@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # restore-official.sh — 一键恢复 Codex 官方配置
-# 动作：从 config.toml 移除 model_provider/model_catalog_json/[model_providers.router]，
+# 动作：从 config.toml 移除顶层 model_provider/model_catalog_json（保留
+#       [model_providers.router] 段，历史会话元数据仍引用它），
 #       停止路由。跑完请完全重启 Codex 桌面端。
 
 set -euo pipefail

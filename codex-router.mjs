@@ -614,6 +614,21 @@ function refreshWebpoolCatalogSoon() {
 // 官方隧道客户端（P2）：仅门面在听且有凭据时真正运行；Bearer 文件写在平台数据目录
 // （defaultRouterDataRoot()\tunnel），值本身只经 file: 头注入隧道子进程。
 let nativeBearerFile = '';
+// macOS 凭据目录曾位于 XDG 路径（~/.local/share/codex-router/tunnel），后迁至
+// ~/Library/Application Support/codex-router/tunnel——旧文件（可能因旧版未设
+// 0600 而权限宽松）必须一次性清除，不能留着一份陈旧隧道凭据（审查 R4#5/#21）
+function legacyBearerFileLegacyPath() {
+  if (process.platform !== 'darwin') return '';
+  const xdg = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+  return path.join(xdg, 'codex-router', 'tunnel', 'mcp-bearer');
+}
+try {
+  const legacyBearer = legacyBearerFileLegacyPath();
+  if (legacyBearer && fs.existsSync(legacyBearer)) {
+    fs.unlinkSync(legacyBearer);
+    console.log(`[tunnel] 已清理旧版凭据文件: ${legacyBearer}`);
+  }
+} catch { /* 清理失败不影响启动 */ }
 function writeNativeBearerFile(bearer) {
   if (!bearer) { nativeBearerFile = ''; return; }
   try {

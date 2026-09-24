@@ -19,11 +19,20 @@ cp "$CFG" "$BAK"
 echo "已备份：$BAK"
 
 # 段感知守卫：只认「顶层」（首个段头之前）的 model_provider / model_catalog_json；
-# 项目级同名键不算已存在。两个键都要查——本脚本成对写入，陈旧的孤立
-# model_catalog_json 不处理会在插入后产生重复键（审查 #22）
-if ! awk '/^[[:space:]]*\[/{t=1} !t && (/^[[:space:]]*model_provider[[:space:]]*=/ || /^[[:space:]]*model_catalog_json[[:space:]]*=/) {found=1} END{exit !found}' "$CFG"; then
+# 顶层键存在性分查（锚点与下方守卫/插入一致，允许前导空白——审查 R4#16）。
+# 两个键成对写入：齐全 → 跳过；孤儿态（只有其一，如旧版脚本/手工编辑残留）→
+# 先剥残缺键再走全新插入，保证结果总是完整的一对（审查 R4#17）
+has_provider=$(awk '/^[[:space:]]*\[/{t=1} !t && /^[[:space:]]*model_provider[[:space:]]*=/{found=1} END{exit !found}' "$CFG" && echo 1 || echo 0)
+has_catalog=$(awk '/^[[:space:]]*\[/{t=1} !t && /^[[:space:]]*model_catalog_json[[:space:]]*=/{found=1} END{exit !found}' "$CFG" && echo 1 || echo 0)
+if [ "$has_provider" = "1" ] && [ "$has_catalog" = "1" ]; then
+    echo "顶层 model_provider / model_catalog_json 已存在，跳过"
+else
+    if [ "$has_provider" = "1" ] || [ "$has_catalog" = "1" ]; then
+        echo "检测到孤儿顶层键（provider=${has_provider} catalog=${has_catalog}），剥除后重写"
+        awk '/^[[:space:]]*\[/{t=1} !t && (/^[[:space:]]*model_provider[[:space:]]*=/ || /^[[:space:]]*model_catalog_json[[:space:]]*=/) {next} {print}' "$CFG" > "$CFG.tmp" && cat "$CFG.tmp" > "$CFG" && rm -f "$CFG.tmp"
+    fi
     # 顶层必须有 model = 行才能定位插入点；没有就明确报错（否则会插进项目段并谎报成功）
-    if ! awk '/^\[/{t=1} !t && /^model[[:space:]]*=/{found=1} END{exit !found}' "$CFG"; then
+    if ! awk '/^[[:space:]]*\[/{t=1} !t && /^[[:space:]]*model[[:space:]]*=/{found=1} END{exit !found}' "$CFG"; then
         echo "错误：config.toml 顶层没有 model = 行，无法定位插入点。请改用管理面板「一键接入路由」。" >&2
         exit 1
     fi
@@ -47,12 +56,22 @@ if ! awk '/^[[:space:]]*\[/{t=1} !t && (/^[[:space:]]*model_provider[[:space:]]*
         { print }
     ' "$CFG" > "$CFG.tmp" && cat "$CFG.tmp" > "$CFG" && rm -f "$CFG.tmp"
     echo "已写回 model_provider / model_catalog_json"
-else
-    echo "顶层 model_provider / model_catalog_json 已存在，跳过"
 fi
 
-# 检查是否已有 [model_providers.router]
-if ! grep -q '^[[:space:]]*\[model_providers\.router\]' "$CFG"; then
+# [model_providers.router] 段刷新写回：先剥旧段（含紧邻的标记注释行）再追加当前
+# 内容——restore-official 现在刻意保留旧段（对齐 JS），段内容刷新职责落在本脚本
+#（审查 R4#18：否则 base_url 等更新永远无法经 .sh 路径生效）
+awk '
+    /^[[:space:]]*\[model_providers\.router\]/ { skip = 1; hold = ""; next }
+    /^[[:space:]]*\[/ { skip = 0 }
+    skip { next }
+    /^# --- Local routing proxy/ { hold = $0; next }
+    {
+        if (hold != "") { print hold; hold = "" }
+        print
+    }
+' "$CFG" > "$CFG.tmp" && cat "$CFG.tmp" > "$CFG" && rm -f "$CFG.tmp"
+if true; then
     cat >> "$CFG" <<'EOF'
 
 # --- Local routing proxy: official via local proxy tunnel, third-party direct, vision relay ---
@@ -63,7 +82,7 @@ wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = false
 EOF
-    echo "已写回 [model_providers.router] 段"
+    echo "已写回 [model_providers.router] 段（刷新）"
 else
     echo "router 段已存在，跳过"
 fi

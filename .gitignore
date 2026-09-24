@@ -44,6 +44,8 @@ external/cursor2api/*.db
 external/cursor2api/.env
 
 # 运行时数据库（SQLite：含账号凭据/API Key/通道密钥，绝不提交）
+# 用户运行时状态（Claude Desktop 暴露/别名/模型选项，审查 R4#22）
+claude-desktop.json
 data/
 *.db
 *.db-shm
@@ -92,4 +94,3 @@ docs/plans/
 scripts/.watchdog-state
 scripts/.watchdog-maintenance
 .freeze-test/
-claude-desktop.json
