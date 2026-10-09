@@ -43,6 +43,7 @@ export default {
           claude: 'rgb(var(--brand-claude-rgb) / <alpha-value>)',
           google: 'rgb(var(--brand-google-rgb) / <alpha-value>)',
           openai: 'rgb(var(--brand-openai-rgb) / <alpha-value>)',
+          github: 'rgb(var(--brand-github-rgb) / <alpha-value>)',
         },
         // 图表/分组点缀色（低饱和协调色板）
         chart: {

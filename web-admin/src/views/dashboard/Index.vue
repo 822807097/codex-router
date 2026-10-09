@@ -39,6 +39,10 @@
       </div>
     </div>
 
+    <!-- 实时运行状态：通道熔断健康 + 最近请求终态。放在统计容器外：
+         独立数据源自带静默降级，且新装用户统计为空（走空态引导）时依然可见 -->
+    <LiveStatusCard class="mt-4" />
+
     <!-- 统一异步状态：加载骨架 / 错误重试 / 空数据引导 -->
     <AsyncContainer
       :loading="loading"
@@ -64,6 +68,9 @@
           <div v-if="card.hint" class="text-xs text-secondary mt-1">{{ card.hint }}</div>
         </el-card>
       </div>
+
+      <!-- 实时运行状态：通道熔断健康 + 最近请求终态（独立数据源，失败静默） -->
+      <LiveStatusCard class="mt-4" />
 
       <!-- GitHub 风格活跃热力图 -->
       <el-card shadow="never" class="chart-card">
@@ -157,6 +164,7 @@ import { listKeys } from '../../api/keys.js';
 import { listAccounts } from '../../api/accounts.js';
 import { getModels } from '../../api/models.js';
 import AsyncContainer from '../../components/AsyncContainer.vue';
+import LiveStatusCard from '../../components/LiveStatusCard.vue';
 import { useECharts, cssVar, chartColorByIndex } from '../../composables/useECharts.js';
 
 // ---- 新手引导 · 三步接入（参考开源方案 onboarding）----

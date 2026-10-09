@@ -11,9 +11,52 @@
     <!-- 顶部 2 模式切换 Tab -->
     <div class="flex justify-center mb-6">
       <el-radio-group v-model="activeMode" size="default" class="segmented-control">
-        <el-radio-button label="oauth">{{ isClaude ? '授权链接 + Code' : 'OAuth 一键授权' }}</el-radio-button>
+        <el-radio-button v-if="!isProvider('copilot')" label="oauth">{{ isClaude ? '授权链接 + Code' : 'OAuth 一键授权' }}</el-radio-button>
+        <el-radio-button v-if="supportDeviceAuth" label="device">设备码（远程/无回调）</el-radio-button>
         <el-radio-button label="token">手动 Token</el-radio-button>
       </el-radio-group>
+    </div>
+
+    <!-- 模式 0: 设备码授权（headless / 远程服务器加号） -->
+    <div v-if="activeMode === 'device'" class="space-y-5">
+      <div class="flex flex-col items-center py-2 text-center">
+        <div class="w-14 h-14 rounded-full bg-accent/10 text-info-text flex items-center justify-center text-2xl mb-3 border border-accent/20">
+          📟
+        </div>
+        <div class="font-bold text-primary text-base mb-1">设备码授权（无需本机回调端口）</div>
+        <div class="text-xs text-secondary max-w-sm leading-relaxed">
+          用任意设备的浏览器打开下方验证链接，输入代码并批准即可
+          <template v-if="isProvider('copilot')">（GitHub 账号登录后输入设备码）</template>
+          <template v-else>（输入下方 8 位代码并批准）</template>。
+          适合远程服务器 / SSH 部署 / 回调端口被占用的场景。
+        </div>
+      </div>
+
+      <el-button
+        type="primary"
+        size="large"
+        class="w-full h-11 text-sm font-semibold tracking-wide shadow-lg shadow-accent/20"
+        :loading="authorizing"
+        @click="handleStartDeviceAuth"
+      >
+        <el-icon v-if="!authorizing" class="mr-1.5"><Lightning /></el-icon>
+        {{ authorizing && !deviceUserCode ? '正在申请设备码...' : (authorizing ? '等待批准...' : '获取设备码') }}
+      </el-button>
+
+      <div v-if="deviceUserCode" class="text-center space-y-3 border border-default rounded-xl py-4">
+        <div class="text-2xs text-secondary">在验证页面输入此代码：</div>
+        <div class="text-3xl font-bold font-mono text-primary tracking-[0.3em] select-all">{{ deviceUserCode }}</div>
+        <div class="flex items-center justify-center gap-2">
+          <el-button size="small" @click="copyUserCode">
+            <el-icon class="mr-1"><CopyDocument /></el-icon>
+            复制代码
+          </el-button>
+          <el-button size="small" type="primary" plain @click="openVerificationUrl">
+            打开验证页面
+          </el-button>
+        </div>
+        <div class="text-2xs text-secondary">批准后本弹窗自动完成绑定（{{ deviceExpiresText }}）</div>
+      </div>
     </div>
 
     <!-- 模式 1: OAuth 授权向导 -->
@@ -112,7 +155,7 @@
     </div>
 
     <!-- 模式 2: 手动输入 Token / Key 模式 -->
-    <div v-else class="space-y-4 text-left">
+    <div v-if="activeMode === 'token'" class="space-y-4 text-left">
       <el-form :model="form" label-position="top">
         <el-form-item label="账号别名 (Alias)">
           <el-input v-model="form.alias" placeholder="例如: 我的主力账号" />
@@ -146,8 +189,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onUnmounted } from 'vue';
-import { startOAuth, pollOAuthStatus, exchangeOAuthCode, addAccount } from '../../../api/accounts.js';
+import { ref, computed, watch, onUnmounted } from 'vue';
+import { startOAuth, pollOAuthStatus, exchangeOAuthCode, addAccount, startDeviceAuth, cancelDeviceAuth } from '../../../api/accounts.js';
 import { ElMessage } from 'element-plus';
 import { useBreakpoint } from '../../../composables/useBreakpoint.js';
 import ProxyConfigEditor from '../../../components/ProxyConfigEditor.vue';
@@ -162,6 +205,10 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'success']);
 
 const activeMode = ref('oauth');
+// copilot 没有本机回环 OAuth 流（GitHub device flow 是唯一加号路径）：默认落在设备码 Tab，
+// 且不展示「OAuth 一键授权」选项
+const defaultModeFor = (provider) => (provider === 'copilot' ? 'device' : 'oauth');
+watch(() => props.provider, (p) => { activeMode.value = defaultModeFor(p); }, { immediate: true });
 const authorizing = ref(false);
 const exchanging = ref(false);
 // 手动 Token 导入防重复提交
@@ -172,8 +219,10 @@ const loopbackPort = ref(null);
 const manualCodeOrUrl = ref('');
 let pollTimer = null;
 let pollTimeoutTimer = null;
-// 授权等待上限 5 分钟：超时停止轮询，防回调丢失后无限空转
-const OAUTH_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+// OAuth 等待上限与后端会话 TTL（10 分钟）对齐 +15s 余量：
+// 预算短于 TTL 时，用户在浏览器登录/授权耗时超过预算就没人接收完成信号，
+// 后端绑定成功也无人知晓（2026-10-05 实测事故）；最后读到的 idle 终态给出明确提示
+const OAUTH_POLL_TIMEOUT_MS = 10 * 60 * 1000 + 15_000;
 
 const form = ref({
   alias: '',
@@ -194,6 +243,8 @@ function resetManualForm() {
 
 const isClaude = computed(() => props.provider === 'claude');
 const isProvider = (name) => props.provider === name;
+// 设备码授权：OpenAI 令牌体系（openai 订阅 / chatgpt-web 网页会话）+ GitHub RFC 8628（copilot）
+const supportDeviceAuth = computed(() => isProvider('openai') || isProvider('chatgpt-web') || isProvider('copilot'));
 
 const dialogTitle = computed(() => {
   const titles = {
@@ -201,6 +252,7 @@ const dialogTitle = computed(() => {
     claude: '添加 Claude 账号 (OAuth 授权)',
     openai: '添加 ChatGPT 账号 (一键授权)',
     'chatgpt-web': '添加 ChatGPT 网页会话账号 (一键授权)',
+    copilot: '添加 GitHub Copilot 账号 (设备码授权)',
   };
   return titles[props.provider] || '添加新账号';
 });
@@ -208,10 +260,16 @@ const dialogTitle = computed(() => {
 const credentialLabel = computed(() => {
   if (props.provider === 'claude') return 'OAuth Refresh Token';
   if (props.provider === 'openai' || props.provider === 'chatgpt-web') return 'OAuth Refresh Token';
+  if (props.provider === 'copilot') return 'GitHub Token';
   return 'Refresh Token';
 });
 
-const credentialPlaceholder = computed(() => '粘贴 OAuth Refresh Token（授权模式下会自动获取，此处用于手动导入）...');
+const credentialPlaceholder = computed(() => {
+  if (props.provider === 'copilot') {
+    return '粘贴 GitHub token（本机 gh auth token 输出，或 classic PAT；推荐走「设备码」Tab 免手动获取）...';
+  }
+  return '粘贴 OAuth Refresh Token（授权模式下会自动获取，此处用于手动导入）...';
+});
 
 function resetFlowState() {
   stopPolling();
@@ -220,10 +278,76 @@ function resetFlowState() {
   sessionState.value = '';
   loopbackPort.value = null;
   manualCodeOrUrl.value = '';
+  deviceUserCode.value = '';
+  deviceVerificationUrl.value = '';
+  deviceExpiresAt.value = 0;
+}
+
+// ---------- 设备码授权 ----------
+const deviceUserCode = ref('');
+const deviceVerificationUrl = ref('');
+const deviceExpiresAt = ref(0);
+
+const deviceExpiresText = computed(() => {
+  if (!deviceExpiresAt.value) return '15 分钟内';
+  const remainMin = Math.max(0, Math.round((deviceExpiresAt.value - Date.now()) / 60_000));
+  return `剩 ${remainMin} 分钟`;
+});
+
+async function handleStartDeviceAuth() {
+  if (authorizing.value) return;
+  authorizing.value = true;
+  try {
+    const res = await startDeviceAuth(props.provider);
+    deviceUserCode.value = res.userCode || '';
+    deviceVerificationUrl.value = res.verificationUrl || '';
+    deviceExpiresAt.value = Number(res.expiresAt) || 0;
+    // 后端已开始后台轮询：前端复用同一 status 端点等待 complete
+    startPolling();
+  } catch {
+    authorizing.value = false;
+  }
+}
+
+function copyUserCode() {
+  if (!deviceUserCode.value) return;
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = deviceUserCode.value;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      ElMessage.success('设备码已复制（降级方式）');
+    } catch {
+      ElMessage.warning('复制失败，请手动选择复制');
+    }
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(deviceUserCode.value).then(
+      () => ElMessage.success('设备码已复制！'),
+      () => fallback(),
+    );
+  } else {
+    fallback();
+  }
+}
+
+function openVerificationUrl() {
+  if (deviceVerificationUrl.value) window.open(deviceVerificationUrl.value, '_blank');
 }
 
 function handleClose(visible) {
-  if (!visible) resetFlowState();
+  if (!visible) {
+    // 设备码会话还没批完就关弹窗：通知后端取消，停掉后台轮询
+    if (activeMode.value === 'device' && authorizing.value && deviceUserCode.value) {
+      cancelDeviceAuth(props.provider).catch(() => { /* 取消失败静默，后端 15 分钟自过期 */ });
+    }
+    resetFlowState();
+  }
   emit('update:modelValue', visible);
 }
 
@@ -263,11 +387,16 @@ function stopPolling() {
 
 function startPolling() {
   stopPolling();
+  // 设备码授权的等待上限跟随后端会话过期时间（15 分钟），而非 OAuth 的 5 分钟——
+  // 否则用户在第 6~15 分钟批准时前端已停止轮询，看不到绑定成功提示
+  const pollBudget = deviceExpiresAt.value > Date.now()
+    ? (deviceExpiresAt.value - Date.now()) + 60_000
+    : OAUTH_POLL_TIMEOUT_MS;
   pollTimeoutTimer = setTimeout(() => {
     stopPolling();
     authorizing.value = false;
     ElMessage.warning('授权等待超时，请重试或检查网络');
-  }, OAUTH_POLL_TIMEOUT_MS);
+  }, pollBudget);
   pollTimer = setInterval(async () => {
     try {
       const res = await pollOAuthStatus(props.provider);
@@ -277,6 +406,12 @@ function startPolling() {
         stopPolling();
         authorizing.value = false;
         ElMessage.error(res.error.message || '授权失败，请重试');
+      } else if (!res.complete && res.status === 'idle') {
+        // 发起过授权却读到「无会话」：后端会话已被 TTL 回收/重置/服务重启，
+        // 浏览器侧再完成授权也不会有回调服务器接收——明确终止而非静默空转
+        stopPolling();
+        authorizing.value = false;
+        ElMessage.warning('授权会话已失效（超时或服务重启），请重新发起授权');
       }
     } catch {
       /* 404 会话不存在等场景静默重试 */
@@ -323,14 +458,19 @@ async function submitManualAccount() {
   }
   importing.value = true;
   try {
+    // copilot 手动导入的是 GitHub token（gh auth token / classic PAT），凭据形态不同：
+    // 长期凭据只有 githubToken，Copilot 短效 JWT 由后端 refresher 首次使用时自动铸造。
+    const credentials = props.provider === 'copilot'
+      ? { githubToken: form.value.token }
+      : {
+        refreshToken: form.value.token,
+        accessToken: '',
+      };
     await addAccount({
       provider: props.provider,
       alias: form.value.alias || `${props.provider} 手动导入`,
       email: form.value.email || '',
-      credentials: {
-        refreshToken: form.value.token,
-        accessToken: '',
-      },
+      credentials,
       proxy: {
         enabled: form.value.proxy.mode === 'custom' && Boolean(form.value.proxy.url?.trim()),
         url: form.value.proxy.url?.trim() || '',

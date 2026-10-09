@@ -72,7 +72,9 @@ import {
 import { createAdminHandler } from './lib/admin-api.mjs';
 import { createAnthropicAdapter } from './lib/anthropic-adapter.mjs';
 import { createClaudeDesktopManager } from './lib/claude-desktop-manager.mjs';
+import { createChannelCircuit } from './lib/channel-circuit.mjs';
 import { createChannelKeyPool } from './lib/channel-key-pool.mjs';
+import { createStatsRing } from './lib/request-stats-ring.mjs';
 import { readRevisionedJson } from './lib/json-file-store.mjs';
 import { inspectModelCatalog } from './lib/model-routing-plan.mjs';
 import { recoverModelRoutingTransaction } from './lib/model-routing-transaction.mjs';
@@ -86,6 +88,7 @@ import { createCredentialsStore, createCredentialsVault } from './lib/auth/crede
 import { refreshGoogleTokens } from './lib/auth/google-sub-auth.mjs';
 import { refreshOpenAiTokens } from './lib/auth/openai-sub-auth.mjs';
 import { refreshClaudeTokens } from './lib/auth/claude-sub-auth.mjs';
+import { exchangeCopilotApiToken } from './lib/auth/copilot-sub-auth.mjs';
 import {
   getDatabase,
   dbListAccounts,
@@ -517,6 +520,29 @@ authManager.registerRefresher('claude', async ({ account }) => {
     expiresAt: Date.now() + Math.max(60, tokens.expiresIn - 300) * 1000,
   };
 });
+// Copilot（2026-10-05）：长期凭据只有 GitHub token；Copilot 短效 JWT（~30 分钟）由本
+// refresher 按需重铸——expiresAt 记 JWT 过期点，getValidCredentials 临期触发。与
+// google/openai 的「续 refresh token」不同，这里是幂等铸造（GET copilot_internal/v2/token）。
+// GitHub 拒绝铸造（token 吊销/无 Copilot 权限，上游 403）归入凭据失效语义（401→auth_expired）。
+authManager.registerRefresher('copilot', async ({ account }) => {
+  try {
+    const minted = await exchangeCopilotApiToken({
+      githubToken: account.credentials.githubToken,
+      proxy: resolveAccountProxy(account),
+    });
+    return {
+      credentials: {
+        githubToken: account.credentials.githubToken,
+        copilotToken: minted.copilotToken,
+        apiEndpoint: minted.apiEndpoint,
+      },
+      expiresAt: minted.expiresAt,
+    };
+  } catch (err) {
+    if (err?.code === 'copilot_token_mint_denied') err.status = 401;
+    throw err;
+  }
+});
 // 刷新得到的新 token 立即写回 vault（重启后凭据不丢）——上游 OAuth 可能轮换 refresh_token，
 // 只在内存持有的话重启后旧 refresh_token 失效会导致账号静默不可用。
 authManager.onCredentialsRefreshed((accountId, credentials) => {
@@ -589,6 +615,15 @@ const { buildChatRequest } = createChatRequestBuilder({
 const apiKeyStore = createApiKeyStore({ db: getDatabase() });
 // 通道密钥池：同通道多账号 key（双形态/优先级），key 级冷却持久化；env_ref 经 envKeySource 热更新解析
 const keyPool = createChannelKeyPool({ db: getDatabase(), envKeySource, log });
+// 通道级熔断器（2026-10-03）：上游主机不可达时按 target 跳过坏通道；只认传输级
+// 失败与 5xx/408，429/401 归 key 池与账号状态机。内存态，路由与管理面共享同一实例。
+const channelCircuit = createChannelCircuit({
+  enabled: cfg.channelCircuit?.enabled !== false,
+  failureThreshold: Number(cfg.channelCircuit?.failureThreshold) || undefined,
+  openMs: Number(cfg.channelCircuit?.openMs) || undefined,
+});
+// 最近请求统计环（2026-10-03）：内存环形数组，面板「最近请求」与通道健康同源展示
+const statsRing = createStatsRing(Number(cfg.statsRing?.limit) || undefined);
 
 // ---------- 网页池原生 MCP 门面（治根改造 P1b，2026-09-14） ----------
 // config chatgptWeb.nativeTools.enabled=true 才启用（默认关——账号 §8 实弹与 Tunnel 凭据
@@ -743,6 +778,9 @@ const adminHandler = createAdminHandler({
   refreshEnvKey: (name) => envKeySource.refreshNow(name),
   // 通道密钥池（管理端点与路由请求共用同一实例）
   keyPool,
+  // 通道熔断器 + 最近请求统计环（管理面只读快照；重置钩子也在管理面）
+  channelCircuit,
+  statsRing,
   // 官方登录态通道的连通性测试：用已绑定账号的 token（含额度计数）
   getOpenAiAuth,
   // 模型连通性探测经本机回环走完整路由管线，需要知道自身监听端口
@@ -786,6 +824,9 @@ try {
     refreshEnvKey: (name) => envKeySource.refreshNow(name),
     keyPool,
     authManager,
+    // 通道熔断器 + 最近请求统计环（与管理面共享同一实例）
+    channelCircuit,
+    statsRing,
     // 用量统计兜底：官方通道 usage 帧缺失时按请求体量估算记入 token_logs，
     // 让「周额度烧在哪」可度量（估算口径 ~4 字节/token × 0.75 JSON 开销折扣）
     onRequestFinished: (diag, { bodyBytes, target, model } = {}) => {

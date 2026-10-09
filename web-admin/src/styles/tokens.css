@@ -52,10 +52,12 @@
   --brand-claude-rgb: 204 108 74;      /* #cc6c4a Anthropic 珊瑚 */
   --brand-google-rgb: 74 124 214;      /* #4a7cd6 Google 蓝 */
   --brand-openai-rgb: 43 152 122;      /* #2b987a OpenAI 青绿 */
+  --brand-github-rgb: 36 41 47;        /* #24292f GitHub 深灰 */
 
   --brand-claude: rgb(var(--brand-claude-rgb));
   --brand-google: rgb(var(--brand-google-rgb));
   --brand-openai: rgb(var(--brand-openai-rgb));
+  --brand-github: rgb(var(--brand-github-rgb));
 
   /* ---- 文本（深青灰梯度，纯白卡片上的层级） ---- */
   --text-primary-rgb: 35 48 68;        /* #233044 标题/正文主色 */

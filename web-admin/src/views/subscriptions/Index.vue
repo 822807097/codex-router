@@ -161,8 +161,40 @@
               {{ quotaData[acc.id]?.error || '点「刷新」探测该账号的实时额度：路由会自动发一条最小请求，约几秒出结果' }}
             </div>
 
+            <!-- Copilot：copilot_internal/user 快照（legacy 三类 + AI Credits 字段并存） -->
+            <template v-if="acc.provider === 'copilot' && quotaData[acc.id]?.ok">
+              <div class="text-[11px] text-secondary mb-1">
+                套餐 <span class="font-medium text-primary">{{ (quotaData[acc.id].plan || 'copilot').toUpperCase() }}</span>
+                <template v-if="quotaData[acc.id].sku"> · {{ quotaData[acc.id].sku }}</template>
+              </div>
+              <template v-for="(row, key) in (quotaData[acc.id].snapshots || {})" :key="key">
+                <div v-if="row && (Number(row.entitlement) > 0 || row.percent_remaining != null)" class="quota-row">
+                  <span class="quota-label">{{ copilotSnapshotLabel(key) }}</span>
+                  <el-progress
+                    :percentage="copilotUsedPercent(row)"
+                    :stroke-width="8"
+                    :show-text="false"
+                    :color="quotaBarColor(copilotUsedPercent(row))"
+                    class="flex-1"
+                  />
+                  <span class="quota-value font-mono">
+                    <template v-if="row.unlimited === true">不限</template>
+                    <template v-else>
+                      {{ Number.isFinite(Number(row.remaining)) ? Number(row.remaining).toFixed(0) : '—' }}<template v-if="Number(row.entitlement) > 0"> / {{ Number(row.entitlement).toFixed(0) }}</template>
+                    </template>
+                  </span>
+                </div>
+              </template>
+              <div class="text-[11px] text-secondary mt-1">
+                快照为上游内部口径（2026-06 起按 token 计费的 AI Credits）；真实余额以 GitHub 计费页为准
+              </div>
+            </template>
+            <div v-else-if="acc.provider === 'copilot'" class="text-[11px] text-secondary">
+              {{ quotaData[acc.id]?.error || '点「刷新」拉取 Copilot 额度快照' }}
+            </div>
+
             <!-- 谷歌 / 其他：本地周计数 -->
-            <template v-if="acc.provider !== 'openai'">
+            <template v-if="acc.provider !== 'openai' && acc.provider !== 'copilot'">
               <div class="text-xs text-secondary">
                 本周已用 <span class="font-mono">{{ acc.quota?.used || 0 }}</span> 次请求
                 <template v-if="acc.quota?.resetsAt > 0"> · {{ formatQuotaReset(acc.quota.resetsAt) }} 重置</template>
@@ -363,6 +395,15 @@ const platforms = [
     actionLabel: '一键授权登录',
     emptyHint: '暂未绑定网页会话账号，点击右上角一键授权登录',
   },
+  {
+    provider: 'copilot',
+    icon: 'GH',
+    iconClass: 'bg-brand-github/15 text-brand-github',
+    title: 'GitHub Copilot 订阅管理',
+    subtitle: 'GitHub 设备码授权绑定 Copilot 订阅额度（copilot-* 模型族，JWT 短效凭证自动重铸）。注意：AI Credits 按 token 计费，agentic 大上下文消耗快，建议在 GitHub 侧设置 spending limit',
+    actionLabel: 'GitHub 设备码授权',
+    emptyHint: '暂未绑定 Copilot 账号，点击右上角 GitHub 设备码授权',
+  },
 ];
 
 function openDialog(provider) {
@@ -426,6 +467,20 @@ function quotaBarColor(percent) {
   if (percent >= 90) return '#f56c6c';
   if (percent >= 70) return '#e6a23c';
   return '#67c23a';
+}
+// Copilot 快照行：legacy 三类（chat/completions/premium_interactions）的人类可读标签
+function copilotSnapshotLabel(key) {
+  const labels = {
+    chat: '对话额度',
+    completions: '补全额度',
+    premium_interactions: 'Premium 额度',
+  };
+  return labels[key] || key;
+}
+function copilotUsedPercent(row) {
+  const remaining = Number(row?.percent_remaining);
+  if (!Number.isFinite(remaining)) return 0;
+  return Math.max(0, Math.min(100, Math.round((100 - remaining) * 10) / 10));
 }
 function loadAllQuotasFor(provider) {
   for (const acc of accounts.value.filter((a) => a.provider === provider)) {
@@ -629,8 +684,10 @@ onMounted(() => {
   loadAllAccounts();
   loadCodexIdentity();
   // ChatGPT 账号自动拉取一次真实额度（谷歌等点击刷新即可）；
-  // chatgpt-web 模板只消费本地周计数、不消费 quotaData，不再对其发起无效拉取
+  // chatgpt-web 模板只消费本地周计数、不消费 quotaData，不再对其发起无效拉取；
+  // Copilot 快照拉取走 api.github.com（与代理无关），同样首屏自动加载
   setTimeout(() => loadAllQuotasFor('openai'), 800);
+  setTimeout(() => loadAllQuotasFor('copilot'), 1200);
 });
 </script>
 

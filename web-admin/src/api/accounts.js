@@ -50,6 +50,26 @@ export function exchangeOAuthCode(provider, code, state) {
   });
 }
 
+/**
+ * 设备码授权（headless / 远程）：返回 userCode + auth.openai.com/codex/device 验证链接。
+ * 后端随即开始后台轮询，前端照常 poll status 等待 complete。
+ */
+export function startDeviceAuth(provider) {
+  return request({
+    url: `/oauth/${provider}/device-start`,
+    method: 'post',
+    timeout: 30_000,
+  });
+}
+
+/** 取消进行中的设备码授权（后端停止轮询并丢弃会话）。 */
+export function cancelDeviceAuth(provider) {
+  return request({
+    url: `/oauth/${provider}/device-cancel`,
+    method: 'post',
+  });
+}
+
 export function testAccountModel(provider, id, model) {
   return request({
     url: '/accounts/test-model',
