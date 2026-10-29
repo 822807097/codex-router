@@ -436,6 +436,10 @@ try {
       status: row.status || 'active',
       cooldownUntil: row.cooldownUntil || 0,
       credentials: vaultAll[row.id] || {},
+      // vault 条目含 expiresAt（授权/刷新时写入）：恢复时带上，否则每次重启后
+      // 每账号首个请求都触发一次 token 刷新——重启即突发打 token 端点，重现
+      // 2026-08-28 谷歌「刷新 429 → 全池冻结」形态（2026-10-24 审计）
+      expiresAt: Number(vaultAll[row.id]?.expiresAt) > 0 ? Number(vaultAll[row.id].expiresAt) : 0,
       proxy: {
         enabled: row.proxyEnabled ?? true,
         url: row.proxyUrl || '',
@@ -536,7 +540,10 @@ authManager.registerRefresher('copilot', async ({ account }) => {
         copilotToken: minted.copilotToken,
         apiEndpoint: minted.apiEndpoint,
       },
-      expiresAt: minted.expiresAt,
+      // 120s 提前量（对齐 openai/claude 的 300s 惯例按 JWT 短时效缩放）：
+      // getValidCredentials 只留 30s 新鲜度，无余量时临期 30s 窗口内发出的请求
+      // 会拿已过期 JWT 吃 401，被误判 auth_expired（githubToken 其实有效，重铸即恢复）
+      expiresAt: minted.expiresAt - 120_000,
     };
   } catch (err) {
     if (err?.code === 'copilot_token_mint_denied') err.status = 401;
