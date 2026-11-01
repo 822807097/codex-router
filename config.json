@@ -434,6 +434,16 @@
       "wireApi": "responses",
       "viaProxy": false,
       "proxyUrl": null
+    },
+    {
+      "name": "openai-api",
+      "host": "api.openai.com",
+      "prefix": "/v1",
+      "protocol": "https",
+      "wireApi": "responses",
+      "match": "^api-(.+)$",
+      "upstreamModel": "$1",
+      "viaProxy": true
     }
   ],
   "supportsResponses": {
@@ -504,6 +514,15 @@
       "_comment": "智谱 GLM（开放平台 API） 预设推荐参数（接入时自动生成）",
       "match": "^glm-",
       "contextWindow": 131072,
+      "maxOutputTokens": 8192,
+      "safetyRatio": 0.9,
+      "protocolReserveTokens": 1024,
+      "imageTokens": 2048
+    },
+    {
+      "_comment": "OpenAI API（订阅月领额度） 预设推荐参数（接入时自动生成）",
+      "match": "^api-(.+)$",
+      "contextWindow": 278528,
       "maxOutputTokens": 8192,
       "safetyRatio": 0.9,
       "protocolReserveTokens": 1024,
