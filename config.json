@@ -74,18 +74,6 @@
   },
   "targets": [
     {
-      "_comment": "官方模型示例为走代理；改为 false 即可直连，不影响登录态和 Responses 协议",
-      "match": "^(gpt-|codex-|o\\d|computer-use)",
-      "name": "openai",
-      "platform": "openai",
-      "host": "chatgpt.com",
-      "prefix": "/backend-api/codex",
-      "useOpenAiAuth": true,
-      "viaProxy": true,
-      "vision": true,
-      "wireApi": "responses"
-    },
-    {
       "_comment": "ChatGPT 网页会话通道：模型名带 web- 前缀走网页对话额度池（与 Codex 额度池独立）。$1 = match 捕获组，web-gpt-5-6 → 上游 slug gpt-5-6；上游清单用账号卡「拉取上游可用模型」同步",
       "match": "^web-(.+)$",
       "name": "chatgpt-web",
@@ -441,7 +429,7 @@
       "prefix": "/v1",
       "protocol": "https",
       "wireApi": "responses",
-      "match": "^api-(.+)$",
+      "match": "^(?:api-)?((?:gpt-|o\\d|codex-).*)$",
       "upstreamModel": "$1",
       "viaProxy": true
     }
